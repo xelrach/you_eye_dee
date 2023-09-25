@@ -6,3 +6,10 @@ edition = "2021"
 [dependencies]
 rand = { version = "0.8.5", features = ["getrandom"] }
 rand_chacha = "0.3.1"
+
+[dev-dependencies]
+criterion = { version = "0.4", features = ["html_reports"] }
+
+[[bench]]
+name = "ulid"
+harness = false

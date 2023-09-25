@@ -1,10 +1,9 @@
 use crate::ulid_decode::{ulid_to_u128, DecodeError};
 use crate::ulid_encode::ulid_to_string;
 use std::fmt::{Debug, Display, Formatter};
-use crate::ulid_generate::UlidGenerationError;
 
-mod ulid_decode;
-mod ulid_encode;
+pub mod ulid_decode;
+pub mod ulid_encode;
 mod ulid_generate;
 
 const ULID_LENGTH: usize = 26;
@@ -32,20 +31,20 @@ impl Ulid {
         Ulid((random & Ulid::RANDOM_MASK) | ((time_ms as u128) << 10))
     }
 
-    fn to_le_bytes(&self) -> [u8; 16] {
+    fn to_le_bytes(self) -> [u8; 16] {
         self.0.to_le_bytes()
     }
 
-    fn to_be_bytes(&self) -> [u8; 16] {
+    fn to_be_bytes(self) -> [u8; 16] {
         self.0.to_be_bytes()
     }
 
-    fn encode(&self) -> String {
+    pub fn encode(&self) -> String {
         ulid_to_string(self)
     }
 
     fn decode(string: &str) -> Result<Self, DecodeError> {
-        ulid_to_u128(string).map(|value| Ulid(value))
+        ulid_to_u128(string).map(Ulid)
     }
 }
 
@@ -62,7 +61,9 @@ impl Debug for Ulid {
 }
 
 impl From<Ulid> for u128 {
-    fn from(value: Ulid) -> Self {
-        value.0
-    }
+    fn from(value: Ulid) -> Self { value.0 }
+}
+
+impl From<u128> for Ulid {
+    fn from(value: u128) -> Self { Ulid(value) }
 }

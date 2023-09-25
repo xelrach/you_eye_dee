@@ -44,7 +44,7 @@ pub fn ulid_to_u128(input: &str) -> Result<u128, DecodeError> {
     unsafe { PARSE_ULID_FN(input) }
 }
 
-fn ulid_to_u128_scalar(input: &str) -> Result<u128, DecodeError> {
+pub fn ulid_to_u128_scalar(input: &str) -> Result<u128, DecodeError> {
     let mut result = 0u128;
     for (i, byte) in input.as_bytes().iter().enumerate() {
         let quint = CROCKFORD_BASE32[*byte as usize];
@@ -82,7 +82,7 @@ fn gather_bytes_scalar(input: &str) -> [u8; 32] {
     bytes
 }
 
-unsafe fn ulid_to_u128_sse2(input: &str) -> Result<u128, DecodeError> {
+pub unsafe fn ulid_to_u128_sse2(input: &str) -> Result<u128, DecodeError> {
     // Convert from the string into an array of bytes
     let decoded_bytes = gather_bytes_scalar(input);
     let bytes_ptr = decoded_bytes.as_ptr();
@@ -168,7 +168,7 @@ unsafe fn shift_ulid_bytes_128(value: __m128i, result: *mut u8) {
     copy_nonoverlapping::<u8>(be_u64_le_bytes_ptr, result.offset(5), 5);
 }
 
-unsafe fn ulid_to_u128_sse3(input: &str) -> Result<u128, DecodeError> {
+pub unsafe fn ulid_to_u128_sse3(input: &str) -> Result<u128, DecodeError> {
     // Convert from the string into an array of bytes
     let decoded_bytes = gather_bytes_scalar(input);
     let bytes_ptr = decoded_bytes.as_ptr();
@@ -241,7 +241,7 @@ unsafe fn madd_ulid_bytes_128(value: __m128i, result: *mut u8) {
     copy_nonoverlapping::<u8>(be_u64_le_bytes_ptr, result.offset(5), 5);
 }
 
-unsafe fn ulid_to_u128_avx2(input: &str) -> Result<u128, DecodeError> {
+pub unsafe fn ulid_to_u128_avx2(input: &str) -> Result<u128, DecodeError> {
     let decoded_bytes = gather_bytes_scalar(input);
     let bytes_ptr = decoded_bytes.as_ptr();
 
