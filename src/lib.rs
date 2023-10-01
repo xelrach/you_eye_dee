@@ -15,7 +15,7 @@ pub struct Ulid(u128);
 impl Ulid {
     const RANDOM_MASK: u128 = 0x000000000000FFFFFFFFFFFFFFFFFFFF;
 
-    fn from_le_bytes(bytes: [u8; 16]) -> Self {
+    pub fn from_le_bytes(bytes: [u8; 16]) -> Self {
         Ulid(u128::from_le_bytes(bytes))
     }
 
@@ -31,11 +31,11 @@ impl Ulid {
         Ulid((random & Ulid::RANDOM_MASK) | ((time_ms as u128) << 10))
     }
 
-    fn to_le_bytes(self) -> [u8; 16] {
+    pub fn to_le_bytes(self) -> [u8; 16] {
         self.0.to_le_bytes()
     }
 
-    fn to_be_bytes(self) -> [u8; 16] {
+    pub fn to_be_bytes(self) -> [u8; 16] {
         self.0.to_be_bytes()
     }
 
@@ -43,7 +43,7 @@ impl Ulid {
         ulid_to_string(self)
     }
 
-    fn decode(string: &str) -> Result<Self, DecodeError> {
+    pub fn decode(string: &str) -> Result<Self, DecodeError> {
         ulid_to_u128(string).map(Ulid)
     }
 }
@@ -61,9 +61,13 @@ impl Debug for Ulid {
 }
 
 impl From<Ulid> for u128 {
-    fn from(value: Ulid) -> Self { value.0 }
+    fn from(value: Ulid) -> Self {
+        value.0
+    }
 }
 
 impl From<u128> for Ulid {
-    fn from(value: u128) -> Self { Ulid(value) }
+    fn from(value: u128) -> Self {
+        Ulid(value)
+    }
 }
