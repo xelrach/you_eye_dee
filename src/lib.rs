@@ -1,6 +1,7 @@
+use std::fmt::{Debug, Display, Formatter};
+
 use crate::ulid_decode::{ulid_to_u128, DecodeError};
 use crate::ulid_encode::ulid_to_string;
-use std::fmt::{Debug, Display, Formatter};
 
 pub mod ulid_decode;
 pub mod ulid_encode;

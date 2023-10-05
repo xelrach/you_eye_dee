@@ -1,8 +1,9 @@
 use std::time::{Duration, SystemTime};
 
-use crate::Ulid;
 use rand::{RngCore, SeedableRng};
 use rand_chacha::ChaCha12Rng;
+
+use crate::Ulid;
 
 const MAX_TIME: Duration = Duration::from_millis(0);
 const MAX_RANDOM: u128 = 0;
