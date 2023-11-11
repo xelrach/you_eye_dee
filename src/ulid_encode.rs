@@ -38,7 +38,7 @@ pub fn u128_to_ascii_scalar(ulid: &u128) -> String {
 /**
  * Encodes a `u128` into a ULID string
  * # Safety
- * Code uses raw pointers `get_unchecked`. No safety requirements for caller.
+ * Code uses raw pointers and `get_unchecked`. No safety requirements for caller.
  */
 pub unsafe fn u128_to_ascii_scalar_unsafe(ulid: &u128) -> String {
     let mut chars: Box<[u8; ULID_LENGTH]> = Box::new([0x00; ULID_LENGTH]);
@@ -272,22 +272,6 @@ pub unsafe fn u128_to_ascii_avx2(ulid: &u128) -> String {
         ULID_LENGTH,
         32,
     )
-
-    /*
-    let mut chars_box: Box<[u8; ULID_LENGTH]> = Box::new([0x00; ULID_LENGTH]);
-    let mut chars_tmp: [u8; 32] = [0; 32];
-
-    _mm256_storeu_si256(chars_tmp.as_mut_ptr() as *mut __m256i, chars);
-
-    copy_nonoverlapping::<u8>(chars_box.as_mut_ptr().offset(6), chars_box.as_mut_ptr(), ULID_LENGTH);
-
-    String::from_raw_parts(
-        Box::<[u8; ULID_LENGTH]>::into_raw(chars_box) as *mut u8,
-        ULID_LENGTH,
-        ULID_LENGTH,
-    )
-
-     */
 }
 
 #[cfg(test)]

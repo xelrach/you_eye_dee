@@ -23,7 +23,7 @@ static ULID_INVALID_MASK: [u8; 32] = [
 
 static mut PARSE_ULID_FN: unsafe fn(&str) -> Result<u128, DecodeError> = ulid_to_u128_scalar;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum DecodeError {
     Unknown,
     WrongLength(usize),
@@ -55,7 +55,22 @@ pub fn ulid_to_u128_scalar(input: &str) -> Result<u128, DecodeError> {
     let mut result = 0u128;
     for (i, byte) in input.as_bytes().iter().enumerate() {
         let quint = CROCKFORD_BASE32[*byte as usize];
-        if quint > 31 {
+        if quint > 31 || (i == 0 && quint > 7) {
+            return Err(DecodeError::InvalidCharacter(i));
+        }
+
+        result <<= 5;
+        result |= quint as u128;
+    }
+
+    Ok(result)
+}
+
+pub unsafe fn ulid_to_u128_scalar_unsafe(input: &str) -> Result<u128, DecodeError> {
+    let mut result = 0u128;
+    for (i, byte) in input.as_bytes().iter().enumerate() {
+        let quint = CROCKFORD_BASE32.get_unchecked(*byte as usize);
+        if *quint > 31 || (i == 0 && *quint > 7) {
             return Err(DecodeError::InvalidCharacter(i));
         }
 
@@ -71,7 +86,7 @@ unsafe fn find_invalid_char_m256i(decoded: __m256i) -> DecodeError {
     let mut bytes: [u8; 32] = [0; 32];
     _mm256_storeu_si256(bytes.as_mut_ptr() as *mut __m256i, decoded);
     for (i, quint) in bytes.iter().enumerate() {
-        if *quint > 31 {
+        if *quint > 31 || (i == 6 && *quint > 7) {
             return DecodeError::InvalidCharacter(i - 6);
         }
     }
@@ -84,7 +99,7 @@ unsafe fn find_invalid_char_m128i(high: __m128i, low: __m128i) -> DecodeError {
     let mut bytes: [u8; 16] = [0; 16];
     _mm_storeu_si128(bytes.as_mut_ptr() as *mut __m128i, high);
     for (i, quint) in bytes.iter().enumerate() {
-        if *quint > 31 {
+        if *quint > 31 || (i == 6 && *quint > 7) {
             return DecodeError::InvalidCharacter(i - 6);
         }
     }
@@ -106,13 +121,6 @@ unsafe fn find_invalid_char_m128i(high: __m128i, low: __m128i) -> DecodeError {
  */
 pub unsafe fn ulid_to_u128_ssse3(input: &str) -> Result<u128, DecodeError> {
     // Convert from the string into an array of bytes
-    /*
-    let decoded_bytes = gather_bytes_scalar(input);
-    let bytes_ptr = decoded_bytes.as_ptr();
-
-    let high = _mm_loadu_si128(bytes_ptr as *const __m128i);
-    let low = _mm_loadu_si128(bytes_ptr.offset(16) as *const __m128i);
-     */
     let mut high = shuffle_lookup_ssse3(input.as_bytes().as_ptr().offset(-6));
     // Zero the extra six bytes at the end of the array
     #[rustfmt::skip]
@@ -485,6 +493,79 @@ mod tests {
                     actual, *expected,
                     "Got: {:#X} Expected: {:#X}",
                     actual, *expected
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ulid_to_u128_wrong_length() {
+        let actual = ulid_to_u128("").unwrap_err();
+        assert_eq!(actual, DecodeError::WrongLength(0));
+
+        let actual = ulid_to_u128("\0").unwrap_err();
+        assert_eq!(actual, DecodeError::WrongLength(1));
+
+        let actual = ulid_to_u128("!!!!!!!!!!!!!!!!!!!!!!!!!").unwrap_err();
+        assert_eq!(actual, DecodeError::WrongLength(25));
+
+        let actual = ulid_to_u128("???????????????????????????").unwrap_err();
+        assert_eq!(actual, DecodeError::WrongLength(27));
+    }
+
+    static INVALID_ULIDS: [&str; 10] = [
+        "8ZZZZZZZZZZZZZZZZZZZZZZZZZ",
+        "\00000000000000000000000000",
+        "0000000000000000000000000/",
+        "0000000000000000000000000:",
+        "0000000000000000000000000@",
+        "0000000000000000000000000[",
+        "``````````````````````````",
+        "{{{{{{{{{{{{{{{{{{{{{{{{{{",
+        "0000000000000000000000000U",
+        "0000000000000000000000000u",
+    ];
+
+    static INVALID_CHAR_POSITION: [usize; 10] = [0, 0, 25, 25, 25, 25, 0, 0, 25, 25];
+
+    #[test]
+    fn test_ulid_to_u128_scalar_invalid_char() {
+        for (ulid_str, expected) in zip(&INVALID_ULIDS, &INVALID_CHAR_POSITION) {
+            let actual = ulid_to_u128_scalar(ulid_str).unwrap_err();
+            assert_eq!(
+                actual,
+                DecodeError::InvalidCharacter(*expected),
+                "Input: {}",
+                ulid_str
+            );
+        }
+    }
+
+    #[test]
+    fn test_ulid_to_u128_ssse3_invalid_char() {
+        unsafe {
+            for (ulid_str, expected) in zip(&INVALID_ULIDS, &INVALID_CHAR_POSITION) {
+                let actual = ulid_to_u128_ssse3(ulid_str).unwrap_err();
+                assert_eq!(
+                    actual,
+                    DecodeError::InvalidCharacter(*expected),
+                    "Input: {}",
+                    ulid_str
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_ulid_to_u128_avx2_invalid_char() {
+        unsafe {
+            for (ulid_str, expected) in zip(&INVALID_ULIDS, &INVALID_CHAR_POSITION) {
+                let actual = ulid_to_u128_avx2(ulid_str).unwrap_err();
+                assert_eq!(
+                    actual,
+                    DecodeError::InvalidCharacter(*expected),
+                    "Input: {}",
+                    ulid_str
                 );
             }
         }
