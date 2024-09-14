@@ -1,10 +1,10 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand;
 
-use you_eye_dee::ulid_decode::{ulid_to_u128_avx2, ulid_to_u128_scalar, ulid_to_u128_ssse3};
-use you_eye_dee::ulid_encode::{
-    u128_to_ascii_avx2, u128_to_ascii_scalar, u128_to_ascii_scalar_unsafe, u128_to_ascii_ssse3,
-};
+use you_eye_dee::ulid_decode::ulid_to_u128_scalar;
+use you_eye_dee::ulid_decode::x86_64::{ulid_to_u128_avx2, ulid_to_u128_ssse3};
+use you_eye_dee::ulid_encode::{u128_to_ascii_scalar, u128_to_ascii_scalar_unsafe};
+use you_eye_dee::ulid_encode::x86_64::{u128_to_ascii_avx2, u128_to_ascii_ssse3};
 use you_eye_dee::Ulid;
 
 fn decode_ulid_to_u128_scalar(criterion: &mut Criterion) {

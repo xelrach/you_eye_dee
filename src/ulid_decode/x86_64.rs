@@ -1,4 +1,4 @@
-use std::arch::x86_64::{
+use core::arch::x86_64::{
     __m128i, __m256i, _mm256_and_si256, _mm256_andnot_si256, _mm256_cmpgt_epi8, _mm256_loadu_si256,
     _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_or_si256, _mm256_permute4x64_epi64,
     _mm256_set1_epi16, _mm256_set1_epi32, _mm256_set1_epi64x, _mm256_set1_epi8, _mm256_setr_epi8,
@@ -10,78 +10,9 @@ use std::arch::x86_64::{
     _mm_sub_epi8,
 };
 use std::ptr::copy_nonoverlapping;
+use crate::ulid_decode::{ULID_INVALID_MASK, DecodeError};
 
-use crate::ULID_LENGTH;
-
-static CROCKFORD_BASE32: [u8; 256] = include!("../resources/crockford_base32_decode.txt");
-// Bits set to 1 in this mask are invalid in BASE32. Doing a bitwise and with this mask will find
-// invalid inputs
-static ULID_INVALID_MASK: [u8; 32] = [
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF8, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0,
-    0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0,
-];
-
-static mut PARSE_ULID_FN: unsafe fn(&str) -> Result<u128, DecodeError> = ulid_to_u128_scalar;
-
-#[derive(Debug, PartialEq, Eq)]
-pub enum DecodeError {
-    Unknown,
-    WrongLength(usize),
-    InvalidCharacter(usize),
-}
-
-pub unsafe fn initialize_simd() {
-    if is_x86_feature_detected!("avx2") {
-        PARSE_ULID_FN = ulid_to_u128_avx2;
-    } else if is_x86_feature_detected!("ssse3") {
-        PARSE_ULID_FN = ulid_to_u128_ssse3;
-    } else {
-        PARSE_ULID_FN = ulid_to_u128_scalar;
-    }
-}
-
-pub fn ulid_to_u128(input: &str) -> Result<u128, DecodeError> {
-    if input.len() != ULID_LENGTH {
-        return Err(DecodeError::WrongLength(input.len()));
-    }
-
-    unsafe { PARSE_ULID_FN(input) }
-}
-
-/**
- * Decodes a ULID string into a `u128`
- */
-pub fn ulid_to_u128_scalar(input: &str) -> Result<u128, DecodeError> {
-    let mut result = 0u128;
-    for (i, byte) in input.as_bytes().iter().enumerate() {
-        let quint = CROCKFORD_BASE32[*byte as usize];
-        if quint > 31 || (i == 0 && quint > 7) {
-            return Err(DecodeError::InvalidCharacter(i));
-        }
-
-        result <<= 5;
-        result |= quint as u128;
-    }
-
-    Ok(result)
-}
-
-pub unsafe fn ulid_to_u128_scalar_unsafe(input: &str) -> Result<u128, DecodeError> {
-    let mut result = 0u128;
-    for (i, byte) in input.as_bytes().iter().enumerate() {
-        let quint = CROCKFORD_BASE32.get_unchecked(*byte as usize);
-        if *quint > 31 || (i == 0 && *quint > 7) {
-            return Err(DecodeError::InvalidCharacter(i));
-        }
-
-        result <<= 5;
-        result |= quint as u128;
-    }
-
-    Ok(result)
-}
-
-#[inline(always)]
+#[target_feature(enable = "avx2")]
 unsafe fn find_invalid_char_m256i(decoded: __m256i) -> DecodeError {
     let mut bytes: [u8; 32] = [0; 32];
     _mm256_storeu_si256(bytes.as_mut_ptr() as *mut __m256i, decoded);
@@ -94,7 +25,7 @@ unsafe fn find_invalid_char_m256i(decoded: __m256i) -> DecodeError {
     DecodeError::Unknown
 }
 
-#[inline(always)]
+#[target_feature(enable = "ssse3")]
 unsafe fn find_invalid_char_m128i(high: __m128i, low: __m128i) -> DecodeError {
     let mut bytes: [u8; 16] = [0; 16];
     _mm_storeu_si128(bytes.as_mut_ptr() as *mut __m128i, high);
@@ -119,6 +50,7 @@ unsafe fn find_invalid_char_m128i(high: __m128i, low: __m128i) -> DecodeError {
  * # Safety
  * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
  */
+#[target_feature(enable = "ssse3")]
 pub unsafe fn ulid_to_u128_ssse3(input: &str) -> Result<u128, DecodeError> {
     // Convert from the string into an array of bytes
     let mut high = shuffle_lookup_ssse3(input.as_bytes().as_ptr().offset(-6));
@@ -155,7 +87,7 @@ pub unsafe fn ulid_to_u128_ssse3(input: &str) -> Result<u128, DecodeError> {
     Ok(u128::from_le_bytes(le_bytes[0..16].try_into().unwrap()))
 }
 
-#[inline(always)]
+#[target_feature(enable = "ssse3")]
 unsafe fn shuffle_lookup_ssse3(ulid_str_ptr: *const u8) -> __m128i {
     let encoded_bytes = _mm_loadu_si128(ulid_str_ptr as *const __m128i);
 
@@ -175,7 +107,7 @@ unsafe fn shuffle_lookup_ssse3(ulid_str_ptr: *const u8) -> __m128i {
     // Decode AO and ao range
     // [A, O] lookup table
     #[rustfmt::skip]
-    let lookup_ao = _mm_setr_epi8(
+        let lookup_ao = _mm_setr_epi8(
         -1, 0x0A, 0x0B,0x0C,0x0D,0x0E,0x0F,0x10,
         0x11,0x01,0x12,0x13,0x01,0x14,0x15,0x00,
     );
@@ -199,7 +131,7 @@ unsafe fn shuffle_lookup_ssse3(ulid_str_ptr: *const u8) -> __m128i {
     // Less than 'P', greater than 'Z' and less than 'p', greater than 'z'
     // [P, Z] lookup table
     #[rustfmt::skip]
-    let lookup_pz = _mm_setr_epi8(
+        let lookup_pz = _mm_setr_epi8(
         0x16,0x17,0x18,0x19,0x1A,-1,0x1B,0x1C,
         0x1D,0x1E,0x1F,-1,-1,-1,-1,-1,
     );
@@ -227,7 +159,7 @@ unsafe fn shuffle_lookup_ssse3(ulid_str_ptr: *const u8) -> __m128i {
  * # Safety
  * `result` MUST have 10 bytes of space
  */
-#[inline(always)]
+#[target_feature(enable = "ssse3")]
 unsafe fn madd_ulid_bytes_128(value: __m128i, result: *mut u8) {
     // Lower eight bytes (64 bits) of the value is:
     // 000hhhhh|000ggggg|000fffff|000eeeee|000ddddd|000ccccc|000bbbbb|000aaaaa
@@ -274,6 +206,7 @@ unsafe fn madd_ulid_bytes_128(value: __m128i, result: *mut u8) {
  * # Safety
  * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
  */
+#[target_feature(enable = "avx2")]
 pub unsafe fn ulid_to_u128_avx2(input: &str) -> Result<u128, DecodeError> {
     let values = shuffle_lookup_avx2(input);
 
@@ -328,7 +261,7 @@ pub unsafe fn ulid_to_u128_avx2(input: &str) -> Result<u128, DecodeError> {
     let permuted = _mm256_permute4x64_epi64::<0x1B>(combined);
 
     #[rustfmt::skip]
-    let shuffle = _mm256_setr_epi8(
+        let shuffle = _mm256_setr_epi8(
         0x0, 0x1, 0x2, 0x3, 0x4, 0x8, 0x9, 0xA,
         0xB, 0xC, -1, -1, -1, -1, -1, -1,
         -1, -1, -1, -1, -1, -1, -1, -1,
@@ -348,7 +281,7 @@ pub unsafe fn ulid_to_u128_avx2(input: &str) -> Result<u128, DecodeError> {
     Ok(result)
 }
 
-#[inline(always)]
+#[target_feature(enable = "avx2")]
 unsafe fn shuffle_lookup_avx2(ulid_str: &str) -> __m256i {
     let encoded_bytes =
         _mm256_loadu_si256(ulid_str.as_bytes().as_ptr().offset(-6) as *const __m256i);
@@ -369,7 +302,7 @@ unsafe fn shuffle_lookup_avx2(ulid_str: &str) -> __m256i {
     // Decode AO and ao range
     // [A, O] lookup table
     #[rustfmt::skip]
-    let lookup_ao = _mm256_setr_epi8(
+        let lookup_ao = _mm256_setr_epi8(
         -1, 0x0A, 0x0B,0x0C,0x0D,0x0E,0x0F,0x10,
         0x11,0x01,0x12,0x13,0x01,0x14,0x15,0x00,
         -1, 0x0A, 0x0B,0x0C,0x0D,0x0E,0x0F,0x10,
@@ -395,7 +328,7 @@ unsafe fn shuffle_lookup_avx2(ulid_str: &str) -> __m256i {
     // Less than 'P', greater than 'Z' and less than 'p', greater than 'z'
     // [P, Z] lookup table
     #[rustfmt::skip]
-    let lookup_pz = _mm256_setr_epi8(
+        let lookup_pz = _mm256_setr_epi8(
         0x16,0x17,0x18,0x19,0x1A,-1,0x1B,0x1C,
         0x1D,0x1E,0x1F,-1,-1,-1,-1,-1,
         0x16,0x17,0x18,0x19,0x1A,-1,0x1B,0x1C,
@@ -419,8 +352,8 @@ unsafe fn shuffle_lookup_avx2(ulid_str: &str) -> __m256i {
 
     // Zero the extra six bytes at the end of the array
     #[rustfmt::skip]
-    let actual_bytes_mask = _mm256_setr_epi8(
-         0, 0, 0, 0, 0, 0,-1, -1,
+        let actual_bytes_mask = _mm256_setr_epi8(
+        0, 0, 0, 0, 0, 0,-1, -1,
         -1, -1, -1, -1, -1, -1, -1, -1,
         -1, -1, -1, -1, -1, -1, -1, -1,
         -1, -1, -1, -1, -1, -1, -1, -1,
@@ -432,8 +365,8 @@ unsafe fn shuffle_lookup_avx2(ulid_str: &str) -> __m256i {
 #[cfg(test)]
 mod tests {
     use std::iter::zip;
-
-    use crate::ulid_decode::*;
+    use crate::ulid_decode::DecodeError;
+    use crate::ulid_decode::x86_64::*;
 
     static ULIDS: [&str; 9] = [
         "00000000000000000000000000",
@@ -458,17 +391,6 @@ mod tests {
         0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF,
     ];
 
-    #[test]
-    fn test_ulid_to_u128_scalar() {
-        for (ulid_str, expected) in zip(&ULIDS, &U128S) {
-            let actual = ulid_to_u128_scalar(ulid_str).unwrap();
-            assert_eq!(
-                actual, *expected,
-                "Got: {:#X} Expected: {:#X}",
-                actual, *expected
-            );
-        }
-    }
 
     #[test]
     fn test_ulid_to_u128_ssse3() {
@@ -498,21 +420,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_ulid_to_u128_wrong_length() {
-        let actual = ulid_to_u128("").unwrap_err();
-        assert_eq!(actual, DecodeError::WrongLength(0));
-
-        let actual = ulid_to_u128("\0").unwrap_err();
-        assert_eq!(actual, DecodeError::WrongLength(1));
-
-        let actual = ulid_to_u128("!!!!!!!!!!!!!!!!!!!!!!!!!").unwrap_err();
-        assert_eq!(actual, DecodeError::WrongLength(25));
-
-        let actual = ulid_to_u128("???????????????????????????").unwrap_err();
-        assert_eq!(actual, DecodeError::WrongLength(27));
-    }
-
     static INVALID_ULIDS: [&str; 10] = [
         "8ZZZZZZZZZZZZZZZZZZZZZZZZZ",
         "\00000000000000000000000000",
@@ -527,19 +434,6 @@ mod tests {
     ];
 
     static INVALID_CHAR_POSITION: [usize; 10] = [0, 0, 25, 25, 25, 25, 0, 0, 25, 25];
-
-    #[test]
-    fn test_ulid_to_u128_scalar_invalid_char() {
-        for (ulid_str, expected) in zip(&INVALID_ULIDS, &INVALID_CHAR_POSITION) {
-            let actual = ulid_to_u128_scalar(ulid_str).unwrap_err();
-            assert_eq!(
-                actual,
-                DecodeError::InvalidCharacter(*expected),
-                "Input: {}",
-                ulid_str
-            );
-        }
-    }
 
     #[test]
     fn test_ulid_to_u128_ssse3_invalid_char() {

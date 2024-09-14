@@ -9,59 +9,14 @@ use std::arch::x86_64::{
 };
 use std::ptr::copy_nonoverlapping;
 
-use crate::{Ulid, ULID_LENGTH};
-
-static CROCKFORD_BASE32_ENCODE: [u8; 256] = include!("../resources/crockford_base32_encode.txt");
-
-static mut ENCODE_ULID_FN: unsafe fn(ulid: &u128) -> String = u128_to_ascii_scalar;
-
-pub fn ulid_to_string(input: &Ulid) -> String {
-    unsafe { ENCODE_ULID_FN(&input.0) }
-}
-
-/**
- * Encodes a `u128` into a ULID string
- */
-pub fn u128_to_ascii_scalar(ulid: &u128) -> String {
-    let mut encoded = String::with_capacity(ULID_LENGTH);
-    for i in 0..ULID_LENGTH {
-        let mut shifted: usize = (ulid >> (125 - i * 5)) as usize;
-        shifted &= 0x1F;
-
-        let character = CROCKFORD_BASE32_ENCODE[shifted];
-        encoded.push(character.into());
-    }
-
-    encoded
-}
-
-/**
- * Encodes a `u128` into a ULID string
- * # Safety
- * Code uses raw pointers and `get_unchecked`. No safety requirements for caller.
- */
-pub unsafe fn u128_to_ascii_scalar_unsafe(ulid: &u128) -> String {
-    let mut chars: Box<[u8; ULID_LENGTH]> = Box::new([0x00; ULID_LENGTH]);
-    for i in 0..ULID_LENGTH {
-        let mut shifted: usize = (ulid >> (125 - i * 5)) as usize;
-        shifted &= 0x1F;
-
-        let character = CROCKFORD_BASE32_ENCODE.get_unchecked(shifted);
-        *chars.get_unchecked_mut(i) = *character;
-    }
-
-    String::from_raw_parts(
-        Box::<[u8; 26]>::into_raw(chars) as *mut u8,
-        ULID_LENGTH,
-        ULID_LENGTH,
-    )
-}
+use crate::ULID_LENGTH;
 
 /**
  * Encodes a `u128` into a ULID string using SSSE3 instructions
  * # Safety
  * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
  */
+#[target_feature(enable = "ssse3")]
 pub unsafe fn u128_to_ascii_ssse3(ulid: &u128) -> String {
     let bytes = ulid.to_le_bytes().as_ptr();
     // Lowest 10 bytes. This will be converted into 16 characters
@@ -69,7 +24,7 @@ pub unsafe fn u128_to_ascii_ssse3(ulid: &u128) -> String {
     // Highest 6 bytes. This will be converted into 10 characters
     // (last character is not from a full byte)
     #[rustfmt::skip]
-    let high_mask = _mm_setr_epi8(
+        let high_mask = _mm_setr_epi8(
         -1, -1, -1, -1, -1, -1, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0
     );
@@ -95,7 +50,7 @@ pub unsafe fn u128_to_ascii_ssse3(ulid: &u128) -> String {
  * # Safety
  * `result` MUST have T bytes of space
  */
-#[inline(always)]
+#[target_feature(enable = "ssse3")]
 unsafe fn encode_bytes_ssse3<const T: isize>(bytes: __m128i, result: *mut u8) {
     // The bytes of the input are:
     // pppppooo|oonnnnnm|mmmmllll|lkkkkkjj|jjjiiiii hhhhhggg|ggfffffe|eeeedddd|dcccccbb|bbbaaaaa|????????|????????|????????|????????|????????|????????
@@ -104,7 +59,7 @@ unsafe fn encode_bytes_ssse3<const T: isize>(bytes: __m128i, result: *mut u8) {
     // Paris will be in LE order, the array in BE order.
     // ??????bb|bbbaaaaa|????dddd|dccccc??|??fffffe|eeee????|hhhhhggg|gg?????? ?????jj|jjjiiiii|????llll|lkkkkk??|??nnnnnm|mmmm????|pppppooo|oo??????
     #[rustfmt::skip]
-    let shuffle = _mm_setr_epi8(
+        let shuffle = _mm_setr_epi8(
         0x08, 0x09, 0x07, 0x08, 0x06, 0x07, 0x05, 0x06,
         0x03, 0x04, 0x02, 0x03, 0x01, 0x02, 0x00, 0x01,
     );
@@ -163,6 +118,7 @@ unsafe fn encode_bytes_ssse3<const T: isize>(bytes: __m128i, result: *mut u8) {
  * # Safety
  * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
  */
+#[target_feature(enable = "avx2")]
 pub unsafe fn u128_to_ascii_avx2(ulid: &u128) -> String {
     let le_bytes = ulid.to_ne_bytes().as_ptr();
 
@@ -176,7 +132,7 @@ pub unsafe fn u128_to_ascii_avx2(ulid: &u128) -> String {
     // Paris will be in LE order, the array in BE order.
     // ??????bb|bbbaaaaa|????dddd|dccccc??|??fffffe|eeee????|hhhhhggg|gg?????? ?????jj|jjjiiiii|????llll|lkkkkk??|??nnnnnm|mmmm????|pppppooo|oo??????
     #[rustfmt::skip]
-    let shuffle = _mm256_setr_epi8(
+        let shuffle = _mm256_setr_epi8(
         -1, -1, -1, -1, -1, -1, 0x0F, -1,
         0x0D, 0x0E, 0x0C, 0x0D, 0x0B, 0x0C, 0x0A, 0x0B,
         0x08, 0x09, 0x07, 0x08, 0x06, 0x07, 0x05, 0x06,
@@ -251,7 +207,7 @@ pub unsafe fn u128_to_ascii_avx2(ulid: &u128) -> String {
     shifted_r2 = _mm256_permute4x64_epi64::<0xAA>(shifted_r2);
     // 00000000|00FFFFFF 00000000|00000000
     #[rustfmt::skip]
-    let mask = _mm256_setr_epi8(
+        let mask = _mm256_setr_epi8(
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, -1, -1, -1, -1, -1, -1,
         0, 0, 0, 0, 0, 0, 0, 0,
@@ -278,7 +234,7 @@ pub unsafe fn u128_to_ascii_avx2(ulid: &u128) -> String {
 mod tests {
     use std::iter::zip;
 
-    use crate::ulid_encode::*;
+    use crate::ulid_encode::x86_64::*;
 
     static ULIDS: [&str; 7] = [
         "00000000000000000000000000",
@@ -300,25 +256,6 @@ mod tests {
     ];
 
     #[test]
-    fn test_u128_to_ascii_scalar() {
-        for (ulid_str, value) in zip(&ULIDS, &U128S) {
-            let actual = u128_to_ascii_scalar(value);
-            assert_eq!(actual, *ulid_str);
-        }
-    }
-
-    #[test]
-    fn test_u128_to_ascii_scalar_unsafe() {
-        for (ulid_str, value) in zip(&ULIDS, &U128S) {
-            unsafe {
-                let actual = u128_to_ascii_scalar_unsafe(value);
-                assert_eq!(actual, *ulid_str);
-            }
-        }
-    }
-
-    #[test]
-    #[cfg(target_feature = "ssse3")]
     fn test_u128_to_ascii_ssse3() {
         for (ulid_str, value) in zip(&ULIDS, &U128S) {
             unsafe {
@@ -329,7 +266,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_feature = "avx2")]
     fn test_u128_to_ascii_avx2() {
         for (ulid_str, value) in zip(&ULIDS, &U128S) {
             unsafe {
