@@ -10,6 +10,7 @@ use core::arch::x86_64::{
     _mm_sub_epi8,
 };
 use std::ptr::copy_nonoverlapping;
+use crate::Ulid;
 use crate::ulid_decode::{ULID_INVALID_MASK, DecodeError};
 
 #[target_feature(enable = "avx2")]
@@ -51,7 +52,7 @@ unsafe fn find_invalid_char_m128i(high: __m128i, low: __m128i) -> DecodeError {
  * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
  */
 #[target_feature(enable = "ssse3")]
-pub unsafe fn ulid_to_u128_ssse3(input: &str) -> Result<u128, DecodeError> {
+pub unsafe fn string_to_ulid_ssse3(input: &str) -> Result<Ulid, DecodeError> {
     // Convert from the string into an array of bytes
     let mut high = shuffle_lookup_ssse3(input.as_bytes().as_ptr().offset(-6));
     // Zero the extra six bytes at the end of the array
@@ -84,7 +85,7 @@ pub unsafe fn ulid_to_u128_ssse3(input: &str) -> Result<u128, DecodeError> {
     madd_ulid_bytes_128(low, le_bytes.as_mut_ptr());
     madd_ulid_bytes_128(high, le_bytes.as_mut_ptr().offset(10));
 
-    Ok(u128::from_le_bytes(le_bytes[0..16].try_into().unwrap()))
+    Ok(u128::from_le_bytes(le_bytes[0..16].try_into().unwrap()).into())
 }
 
 #[target_feature(enable = "ssse3")]
@@ -207,7 +208,7 @@ unsafe fn madd_ulid_bytes_128(value: __m128i, result: *mut u8) {
  * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
  */
 #[target_feature(enable = "avx2")]
-pub unsafe fn ulid_to_u128_avx2(input: &str) -> Result<u128, DecodeError> {
+pub unsafe fn string_to_ulid_avx2(input: &str) -> Result<Ulid, DecodeError> {
     let values = shuffle_lookup_avx2(input);
 
     // Check that all of the characters were valid
@@ -278,7 +279,7 @@ pub unsafe fn ulid_to_u128_avx2(input: &str) -> Result<u128, DecodeError> {
 
     result |= high;
 
-    Ok(result)
+    Ok(result.into())
 }
 
 #[target_feature(enable = "avx2")]
@@ -393,28 +394,28 @@ mod tests {
 
 
     #[test]
-    fn test_ulid_to_u128_ssse3() {
+    fn test_string_to_ulid_ssse3() {
         for (ulid_str, expected) in zip(&ULIDS, &U128S) {
             unsafe {
-                let actual = ulid_to_u128_ssse3(ulid_str).unwrap();
+                let actual = string_to_ulid_ssse3(ulid_str).unwrap();
                 assert_eq!(
-                    actual, *expected,
+                    <Ulid as Into<u128>>::into(actual), *expected,
                     "Got: {:#X} Expected: {:#X}",
-                    actual, *expected
+                    <Ulid as Into<u128>>::into(actual), *expected
                 );
             }
         }
     }
 
     #[test]
-    fn test_ulid_to_u128_avx2() {
+    fn test_string_to_ulid_avx2() {
         for (ulid_str, expected) in zip(&ULIDS, &U128S) {
             unsafe {
-                let actual = ulid_to_u128_avx2(ulid_str).unwrap();
+                let actual = string_to_ulid_avx2(ulid_str).unwrap();
                 assert_eq!(
-                    actual, *expected,
+                    <Ulid as Into<u128>>::into(actual), *expected,
                     "Got: {:#X} Expected: {:#X}",
-                    actual, *expected
+                    <Ulid as Into<u128>>::into(actual), *expected
                 );
             }
         }
@@ -439,7 +440,7 @@ mod tests {
     fn test_ulid_to_u128_ssse3_invalid_char() {
         unsafe {
             for (ulid_str, expected) in zip(&INVALID_ULIDS, &INVALID_CHAR_POSITION) {
-                let actual = ulid_to_u128_ssse3(ulid_str).unwrap_err();
+                let actual = string_to_ulid_ssse3(ulid_str).unwrap_err();
                 assert_eq!(
                     actual,
                     DecodeError::InvalidCharacter(*expected),
@@ -454,7 +455,7 @@ mod tests {
     fn test_ulid_to_u128_avx2_invalid_char() {
         unsafe {
             for (ulid_str, expected) in zip(&INVALID_ULIDS, &INVALID_CHAR_POSITION) {
-                let actual = ulid_to_u128_avx2(ulid_str).unwrap_err();
+                let actual = string_to_ulid_avx2(ulid_str).unwrap_err();
                 assert_eq!(
                     actual,
                     DecodeError::InvalidCharacter(*expected),

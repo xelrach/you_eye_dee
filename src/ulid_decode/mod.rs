@@ -3,7 +3,8 @@ pub mod aarch64;
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
-use crate::ULID_LENGTH;
+use std::sync::OnceLock;
+use crate::{Ulid, ULID_LENGTH};
 
 static CROCKFORD_BASE32: [u8; 256] = include!("../../resources/crockford_base32_decode.txt");
 // Bits set to 1 in this mask are invalid in BASE32. Doing a bitwise and with this mask will find
@@ -13,6 +14,8 @@ static ULID_INVALID_MASK: [u8; 32] = [
     0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0, 0xE0,
 ];
 
+static DECODE_ULID_FN: OnceLock<unsafe fn(input: &str) -> Result<Ulid, DecodeError>> = OnceLock::new();
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum DecodeError {
     Unknown,
@@ -20,53 +23,38 @@ pub enum DecodeError {
     InvalidCharacter(usize),
 }
 
-#[cfg(not(any(target_feature = "sssse3", target_feature = "avx2", target_feature = "neon")))]
-pub fn ulid_to_u128(input: &str) -> Result<u128, DecodeError> {
+pub fn string_to_ulid(input: &str) -> Result<Ulid, DecodeError> {
     if input.len() != ULID_LENGTH {
         return Err(DecodeError::WrongLength(input.len()));
     }
 
-    unsafe { ulid_to_u128_scalar_unsafe(input) }
-}
+    let func = DECODE_ULID_FN.get_or_init(|| {
+        #[cfg(target_arch = "x86_64")] {
+            if is_x86_feature_detected!("avx2") {
+                return x86_64::string_to_ulid_avx2;
+            } else if is_x86_feature_detected!("ssse3") {
+                return x86_64::string_to_ulid_ssse3;
+            }
+        }
+        #[cfg(target_arch = "aarch64")] {
+            if is_aarch64_feature_detected!("neon") {
+                return aarch64::ulid_to_u128_neon;
+            }
+        }
 
-#[cfg(all(target_feature = "sssse3", not(target_feature = "avx2")))]
-pub fn ulid_to_u128(input: &str) -> Result<u128, DecodeError> {
-    if input.len() != ULID_LENGTH {
-        return Err(DecodeError::WrongLength(input.len()));
-    }
+        string_to_ulid_scalar_unsafe
+    });
 
-    unsafe { x86_64::ulid_to_u128_ssse3(input) }
-}
-
-#[cfg(target_feature = "avx2")]
-pub fn ulid_to_u128(input: &str) -> Result<u128, DecodeError> {
-    if input.len() != ULID_LENGTH {
-        return Err(DecodeError::WrongLength(input.len()));
-    }
-
-    unsafe { x86_64::ulid_to_u128_avx2(input) }
-}
-
-#[cfg(target_feature = "neon")]
-pub fn ulid_to_u128(input: &str) -> Result<u128, DecodeError> {
-    if input.len() != ULID_LENGTH {
-        return Err(DecodeError::WrongLength(input.len()));
-    }
-
-    unsafe { aarch64::ulid_to_u128_neon(input) }
+    unsafe { func(input) }
 }
 
 /**
  * Decodes a ULID string into a `u128`
  */
-pub fn ulid_to_u128_scalar(input: &str) -> Result<u128, DecodeError> {
+pub fn string_to_ulid_scalar(input: &str) -> Result<Ulid, DecodeError> {
     let mut result = 0u128;
     for (i, byte) in input.as_bytes().iter().enumerate() {
-        let byte = *byte;
-        // Assert is always true and thus is removed from actual code.
-        // The assert skips bounds checking on the array.
-        assert!(byte <= 255);
-        let quint = CROCKFORD_BASE32[byte as usize];
+        let quint = CROCKFORD_BASE32[*byte as usize];
         if quint > 31 || (i == 0 && quint > 7) {
             return Err(DecodeError::InvalidCharacter(i));
         }
@@ -75,10 +63,10 @@ pub fn ulid_to_u128_scalar(input: &str) -> Result<u128, DecodeError> {
         result |= quint as u128;
     }
 
-    Ok(result)
+    Ok(result.into())
 }
 
-pub unsafe fn ulid_to_u128_scalar_unsafe(input: &str) -> Result<u128, DecodeError> {
+pub unsafe fn string_to_ulid_scalar_unsafe(input: &str) -> Result<Ulid, DecodeError> {
     let mut result = 0u128;
     for (i, byte) in input.as_bytes().iter().enumerate() {
         let quint = CROCKFORD_BASE32.get_unchecked(*byte as usize);
@@ -90,7 +78,7 @@ pub unsafe fn ulid_to_u128_scalar_unsafe(input: &str) -> Result<u128, DecodeErro
         result |= *quint as u128;
     }
 
-    Ok(result)
+    Ok(result.into())
 }
 
 #[cfg(test)]
@@ -124,29 +112,29 @@ mod tests {
     ];
 
     #[test]
-    fn test_ulid_to_u128_scalar() {
+    fn test_string_to_ulid_scalar() {
         for (ulid_str, expected) in zip(&ULIDS, &U128S) {
-            let actual = ulid_to_u128_scalar(ulid_str).unwrap();
+            let actual = string_to_ulid_scalar(ulid_str).unwrap();
             assert_eq!(
-                actual, *expected,
+                <Ulid as Into<u128>>::into(actual), *expected,
                 "Got: {:#X} Expected: {:#X}",
-                actual, *expected
+                <Ulid as Into<u128>>::into(actual), *expected
             );
         }
     }
 
     #[test]
-    fn test_ulid_to_u128_wrong_length() {
-        let actual = ulid_to_u128("").unwrap_err();
+    fn test_string_to_ulid_wrong_length() {
+        let actual = string_to_ulid("").unwrap_err();
         assert_eq!(actual, DecodeError::WrongLength(0));
 
-        let actual = ulid_to_u128("\0").unwrap_err();
+        let actual = string_to_ulid("\0").unwrap_err();
         assert_eq!(actual, DecodeError::WrongLength(1));
 
-        let actual = ulid_to_u128("!!!!!!!!!!!!!!!!!!!!!!!!!").unwrap_err();
+        let actual = string_to_ulid("!!!!!!!!!!!!!!!!!!!!!!!!!").unwrap_err();
         assert_eq!(actual, DecodeError::WrongLength(25));
 
-        let actual = ulid_to_u128("???????????????????????????").unwrap_err();
+        let actual = string_to_ulid("???????????????????????????").unwrap_err();
         assert_eq!(actual, DecodeError::WrongLength(27));
     }
 
@@ -166,9 +154,9 @@ mod tests {
     static INVALID_CHAR_POSITION: [usize; 10] = [0, 0, 25, 25, 25, 25, 0, 0, 25, 25];
 
     #[test]
-    fn test_ulid_to_u128_scalar_invalid_char() {
+    fn test_string_to_ulid_scalar_invalid_char() {
         for (ulid_str, expected) in zip(&INVALID_ULIDS, &INVALID_CHAR_POSITION) {
-            let actual = ulid_to_u128_scalar(ulid_str).unwrap_err();
+            let actual = string_to_ulid_scalar(ulid_str).unwrap_err();
             assert_eq!(
                 actual,
                 DecodeError::InvalidCharacter(*expected),

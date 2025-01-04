@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 
-use crate::ulid_decode::{ulid_to_u128, DecodeError};
+use crate::ulid_decode::{string_to_ulid, DecodeError};
 use crate::ulid_encode::ulid_to_string;
 
 pub mod ulid_decode;
@@ -45,7 +45,7 @@ impl Ulid {
     }
 
     pub fn decode(string: &str) -> Result<Self, DecodeError> {
-        ulid_to_u128(string).map(Ulid)
+        string_to_ulid(string)
     }
 }
 
@@ -61,6 +61,12 @@ impl Debug for Ulid {
     }
 }
 
+impl From<&Ulid> for u128 {
+    fn from(value: &Ulid) -> Self {
+        value.0
+    }
+}
+
 impl From<Ulid> for u128 {
     fn from(value: Ulid) -> Self {
         value.0
@@ -70,5 +76,19 @@ impl From<Ulid> for u128 {
 impl From<u128> for Ulid {
     fn from(value: u128) -> Self {
         Ulid(value)
+    }
+}
+
+impl TryFrom<&str> for Ulid {
+    type Error = DecodeError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        string_to_ulid(value)
+    }
+}
+
+impl From<&Ulid> for String {
+    fn from(value: &Ulid) -> Self {
+        ulid_to_string(value)
     }
 }

@@ -1,14 +1,27 @@
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
+use std::sync::OnceLock;
 use crate::{Ulid, ULID_LENGTH};
 
 static CROCKFORD_BASE32_ENCODE: [u8; 256] = include!("../../resources/crockford_base32_encode.txt");
 
-static mut ENCODE_ULID_FN: unsafe fn(ulid: &u128) -> String = u128_to_ascii_scalar;
+static ENCODE_ULID_FN: OnceLock<unsafe fn(ulid: &u128) -> String> = OnceLock::new();
 
 pub fn ulid_to_string(input: &Ulid) -> String {
-    unsafe { ENCODE_ULID_FN(&input.0) }
+    let func = ENCODE_ULID_FN.get_or_init(|| {
+        #[cfg(target_arch = "x86_64")] {
+            if is_x86_feature_detected!("avx2") {
+                return x86_64::u128_to_ascii_avx2;
+            } else if is_x86_feature_detected!("ssse3") {
+                return x86_64::u128_to_ascii_ssse3;
+            }
+        }
+
+        u128_to_ascii_scalar_unsafe
+    });
+
+    unsafe { func(&input.0) }
 }
 
 /**
@@ -20,6 +33,9 @@ pub fn u128_to_ascii_scalar(ulid: &u128) -> String {
         let mut shifted: usize = (ulid >> (125 - i * 5)) as usize;
         shifted &= 0x1F;
 
+        // Assert is always true and thus is removed from actual code.
+        // The assert skips bounds checking on the array.
+        assert!(shifted <= 0x1F);
         let character = CROCKFORD_BASE32_ENCODE[shifted];
         encoded.push(character.into());
     }
