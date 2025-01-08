@@ -5,9 +5,8 @@ use std::arch::x86_64::{
     _mm256_setr_epi8, _mm256_shuffle_epi8, _mm256_slli_si256, _mm256_srli_si256,
     _mm256_storeu_si256, _mm_add_epi8, _mm_and_si128, _mm_cmpgt_epi8, _mm_loadu_si128,
     _mm_mulhi_epu16, _mm_mullo_epi16, _mm_or_si128, _mm_set1_epi16, _mm_set1_epi64x, _mm_set1_epi8,
-    _mm_setr_epi8, _mm_shuffle_epi8,
+    _mm_setr_epi8, _mm_shuffle_epi8, _mm_slli_si128, _mm_srli_si128, _mm_storeu_si128,
 };
-use std::ptr::copy_nonoverlapping;
 
 use crate::ULID_LENGTH;
 
@@ -18,25 +17,41 @@ use crate::ULID_LENGTH;
  */
 #[target_feature(enable = "ssse3")]
 pub unsafe fn u128_to_ascii_ssse3(ulid: &u128) -> String {
-    let bytes = ulid.to_le_bytes().as_ptr();
-    // Lowest 10 bytes. This will be converted into 16 characters
-    let low = _mm_loadu_si128(bytes as *const __m128i);
-    // Highest 6 bytes. This will be converted into 10 characters
-    // (last character is not from a full byte)
+    let bytes = _mm_loadu_si128(ulid.to_le_bytes().as_ptr() as *const __m128i);
+
+    // The bytes of the input are:
+    // zzzzzyyy|yyxxxxxw|wwwwvvvv|vuuuuutt|tttsssss|rrrrrqqq|qqpppppo|oooonnnn|nmmmmmll|lllkkkkk|jjjjjiii|iihhhhhg|ggggffff|feeeeedd|dddccccc|bbbbbaaa
+
+    // Get the 10 bytes which will become the low 16 characters
+    // Copy pairs of bytes and reverse the endianness.
+    // Paris will be in LE order, the array in BE order.
+    // ??????ll|lllkkkkk|????nnnn|nmmmmm??|??pppppo|oooo????|rrrrrqqq|qq??????|??????tt|tttsssss|????vvvv|vuuuuu??|??xxxxxw|wwww????|zzzzzyyy|yy??????
     #[rustfmt::skip]
-        let high_mask = _mm_setr_epi8(
-        -1, -1, -1, -1, -1, -1, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0
+    let shuffle = _mm_setr_epi8(
+        0x08, 0x09, 0x07, 0x08, 0x06, 0x07, 0x05, 0x06,
+        0x03, 0x04, 0x02, 0x03, 0x01, 0x02, 0x00, 0x01,
     );
-    let high = _mm_and_si128(
-        _mm_loadu_si128(bytes.offset(10) as *const __m128i),
-        high_mask,
+    let low_bytes = _mm_shuffle_epi8(bytes, shuffle);
+    let low_chars = encode_bytes_ssse3(low_bytes);
+
+    // Get the 6 bytes which will become the high 10 characters
+    // Copy pairs of bytes and reverse the endianness.
+    // Paris will be in LE order, the array in BE order.
+    // 00000000|00000000|00000000|00000000|00000000|00000000|bbbbbaaa|00000000|??????dd|dddccccc|????ffff|feeeee??|??hhhhhg|gggg????|jjjjjiii|ii??????
+    #[rustfmt::skip]
+    let shuffle = _mm_setr_epi8(
+        -1, -1, -1, -1, -1, -1, 0x0F, -1,
+        0x0D, 0x0E, 0x0C, 0x0D, 0x0B, 0x0C, 0x0A, 0x0B,
     );
+    let mid_bytes = _mm_shuffle_epi8(bytes, shuffle);
+    let mid_chars = encode_bytes_ssse3(mid_bytes);
+    // Shift 6 bytes to more significant
+    let high_chars = _mm_srli_si128::<6>(mid_chars);
 
     let mut chars: Box<[u8; ULID_LENGTH]> = Box::new([0x00; ULID_LENGTH]);
 
-    encode_bytes_ssse3::<16>(low, chars.as_mut_ptr().offset(10));
-    encode_bytes_ssse3::<10>(high, chars.as_mut_ptr());
+    _mm_storeu_si128(chars.as_mut_ptr() as *mut __m128i, high_chars);
+    _mm_storeu_si128(chars.as_mut_ptr().offset(10) as *mut __m128i, low_chars);
 
     String::from_raw_parts(
         Box::<[u8; ULID_LENGTH]>::into_raw(chars) as *mut u8,
@@ -48,37 +63,18 @@ pub unsafe fn u128_to_ascii_ssse3(ulid: &u128) -> String {
 /**
  * Encodes part of a `u128` into part of a ULID string
  * # Safety
- * `result` MUST have T bytes of space
+ * No restrictions on caller
  */
 #[target_feature(enable = "ssse3")]
-unsafe fn encode_bytes_ssse3<const T: isize>(bytes: __m128i, result: *mut u8) {
-    // The bytes of the input are:
-    // pppppooo|oonnnnnm|mmmmllll|lkkkkkjj|jjjiiiii hhhhhggg|ggfffffe|eeeedddd|dcccccbb|bbbaaaaa|????????|????????|????????|????????|????????|????????
-
-    // Copy pairs of bytes and reverse the endianness.
-    // Paris will be in LE order, the array in BE order.
-    // ??????bb|bbbaaaaa|????dddd|dccccc??|??fffffe|eeee????|hhhhhggg|gg?????? ?????jj|jjjiiiii|????llll|lkkkkk??|??nnnnnm|mmmm????|pppppooo|oo??????
-    #[rustfmt::skip]
-        let shuffle = _mm_setr_epi8(
-        0x08, 0x09, 0x07, 0x08, 0x06, 0x07, 0x05, 0x06,
-        0x03, 0x04, 0x02, 0x03, 0x01, 0x02, 0x00, 0x01,
-    );
-    let duplicated_bytes = _mm_shuffle_epi8(bytes, shuffle);
-
+unsafe fn encode_bytes_ssse3(bytes: __m128i) -> __m128i {
     // Shift to the left: a by 8, c by 6, e by 4, g by 2
     let multiplicand = _mm_set1_epi64x(0x0100_0040_0010_0004);
     // 000aaaaa|00000000|000ccccc|00000000|000eeeee|00000000|000ggggg|00000000
-    let odds = _mm_and_si128(
-        _mm_mullo_epi16(duplicated_bytes, multiplicand),
-        _mm_set1_epi16(0x1F00),
-    );
+    let odds = _mm_and_si128(_mm_mullo_epi16(bytes, multiplicand), _mm_set1_epi16(0x1F00));
     // Shift to the right: b by 5, d by 7, f by 9, h by 11
     let multiplicand = _mm_set1_epi64x(0x0800_0200_0080_0020);
     // 00000000|000bbbbb|00000000|000ddddd|00000000|000fffff|00000000|000hhhhh
-    let evens = _mm_and_si128(
-        _mm_mulhi_epu16(duplicated_bytes, multiplicand),
-        _mm_set1_epi16(0x001F),
-    );
+    let evens = _mm_and_si128(_mm_mulhi_epu16(bytes, multiplicand), _mm_set1_epi16(0x001F));
 
     // 000aaaaa|000bbbbb|000ccccc|000ddddd|000eeeee|000fffff|000ggggg|000hhhhh
     let quints = _mm_or_si128(odds, evens);
@@ -106,11 +102,7 @@ unsafe fn encode_bytes_ssse3<const T: isize>(bytes: __m128i, result: *mut u8) {
     let delta = _mm_and_si128(_mm_cmpgt_epi8(quints, _mm_set1_epi8(26)), _mm_set1_epi8(1));
     chars = _mm_add_epi8(chars, delta);
 
-    let chars_ptr = &chars as *const __m128i as *const u8;
-
-    // For the low bytes, we copy all 16 characters.
-    // For the high bytes, we copy the last 10 characters in the array
-    copy_nonoverlapping::<u8>(chars_ptr.offset(16 - T), result, T as usize);
+    chars
 }
 
 /**
@@ -207,7 +199,7 @@ pub unsafe fn u128_to_ascii_avx2(ulid: &u128) -> String {
     shifted_r2 = _mm256_permute4x64_epi64::<0xAA>(shifted_r2);
     // 00000000|00FFFFFF 00000000|00000000
     #[rustfmt::skip]
-        let mask = _mm256_setr_epi8(
+    let mask = _mm256_setr_epi8(
         0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, -1, -1, -1, -1, -1, -1,
         0, 0, 0, 0, 0, 0, 0, 0,
@@ -257,9 +249,9 @@ mod tests {
 
     #[test]
     fn test_u128_to_ascii_ssse3() {
-        for (ulid_str, value) in zip(&ULIDS, &U128S) {
+        for (ulid_str, value) in zip(ULIDS, U128S) {
             unsafe {
-                let actual = u128_to_ascii_ssse3(value);
+                let actual = u128_to_ascii_ssse3(&value);
                 assert_eq!(actual, *ulid_str);
             }
         }
@@ -267,9 +259,9 @@ mod tests {
 
     #[test]
     fn test_u128_to_ascii_avx2() {
-        for (ulid_str, value) in zip(&ULIDS, &U128S) {
+        for (ulid_str, value) in zip(ULIDS, U128S) {
             unsafe {
-                let actual = u128_to_ascii_avx2(value);
+                let actual = u128_to_ascii_avx2(&value);
                 assert_eq!(actual, *ulid_str);
             }
         }
