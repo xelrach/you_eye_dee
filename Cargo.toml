@@ -1,0 +1,3 @@
+[workspace]
+members = ["ulid_simd"]
+resolver = "2"
