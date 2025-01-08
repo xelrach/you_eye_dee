@@ -1,8 +1,8 @@
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
-use std::sync::OnceLock;
 use crate::{Ulid, ULID_LENGTH};
+use std::sync::OnceLock;
 
 static CROCKFORD_BASE32_ENCODE: [u8; 256] = include!("../../resources/crockford_base32_encode.txt");
 
@@ -10,7 +10,8 @@ static ENCODE_ULID_FN: OnceLock<unsafe fn(ulid: &u128) -> String> = OnceLock::ne
 
 pub fn ulid_to_string(input: &Ulid) -> String {
     let func = ENCODE_ULID_FN.get_or_init(|| {
-        #[cfg(target_arch = "x86_64")] {
+        #[cfg(target_arch = "x86_64")]
+        {
             if is_x86_feature_detected!("avx2") {
                 return x86_64::u128_to_ascii_avx2;
             } else if is_x86_feature_detected!("ssse3") {

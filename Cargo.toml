@@ -1,15 +1,16 @@
 [package]
-name = "you-eye-dee"
+name = "ulid_simd"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+aligned = "0.4.2"
 rand = { version = "0.8.5", features = ["getrandom"] }
 rand_chacha = "0.3.1"
 
 [dev-dependencies]
-criterion = { version = "0.4", features = ["html_reports"] }
+criterion = { version = "0.4" }
 
 [[bench]]
-name = "ulid"
+name = "ulid_simd"
 harness = false

@@ -1,11 +1,11 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand;
 
-use you_eye_dee::ulid_decode::{string_to_ulid_scalar, string_to_ulid_scalar_unsafe};
-use you_eye_dee::ulid_decode::x86_64::{string_to_ulid_avx2, string_to_ulid_ssse3};
-use you_eye_dee::ulid_encode::{u128_to_ascii_scalar, u128_to_ascii_scalar_unsafe};
-use you_eye_dee::ulid_encode::x86_64::{u128_to_ascii_avx2, u128_to_ascii_ssse3};
-use you_eye_dee::Ulid;
+use ulid_simd::ulid_decode::string_to_ulid_scalar;
+use ulid_simd::ulid_decode::x86_64::{string_to_ulid_avx2, string_to_ulid_ssse3};
+use ulid_simd::ulid_encode::x86_64::{u128_to_ascii_avx2, u128_to_ascii_ssse3};
+use ulid_simd::ulid_encode::{u128_to_ascii_scalar, u128_to_ascii_scalar_unsafe};
+use ulid_simd::Ulid;
 
 fn decode_string_to_ulid_scalar(criterion: &mut Criterion) {
     const COUNT: usize = 10_000;
@@ -19,26 +19,6 @@ fn decode_string_to_ulid_scalar(criterion: &mut Criterion) {
             bencher.iter(|| {
                 for ulid in &ulid_strings {
                     let _result = string_to_ulid_scalar(ulid);
-                }
-            });
-        },
-    );
-}
-
-fn decode_string_to_ulid_scalar_unsafe(criterion: &mut Criterion) {
-    const COUNT: usize = 10_000;
-    let mut group = criterion.benchmark_group("decode_string_to_ulid_scalar_unsafe");
-    group.throughput(Throughput::Elements(COUNT as u64));
-    group.bench_with_input(
-        BenchmarkId::from_parameter(COUNT),
-        &COUNT,
-        |bencher, &count| {
-            let ulid_strings = generate_ulid_strings(count);
-            bencher.iter(|| {
-                for ulid in &ulid_strings {
-                    unsafe {
-                        let _result = string_to_ulid_scalar_unsafe(ulid);
-                    }
                 }
             });
         },
@@ -186,7 +166,6 @@ fn generate_ulid_bytes(count: usize) -> Vec<u128> {
 criterion_group!(
     ulid_decode,
     decode_string_to_ulid_scalar,
-    decode_string_to_ulid_scalar_unsafe,
     decode_string_to_ulid_ssse3,
     decode_string_to_ulid_avx2,
 );

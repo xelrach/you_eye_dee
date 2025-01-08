@@ -1,3 +1,8 @@
+use crate::ulid_decode::consts::{
+    AO_TABLE, CHAR_0, MASK_LAST_TEN_BYTES, PZ_TABLE, ULID_INVALID_MASK,
+};
+use crate::ulid_decode::DecodeError;
+use crate::Ulid;
 use core::arch::x86_64::{
     __m128i, __m256i, _mm256_and_si256, _mm256_andnot_si256, _mm256_cmpgt_epi8, _mm256_loadu_si256,
     _mm256_madd_epi16, _mm256_maddubs_epi16, _mm256_or_si256, _mm256_permute4x64_epi64,
@@ -5,13 +10,12 @@ use core::arch::x86_64::{
     _mm256_shuffle_epi8, _mm256_slli_epi64, _mm256_srli_epi64, _mm256_storeu_si256,
     _mm256_sub_epi8, _mm256_testz_si256, _mm_and_si128, _mm_andnot_si128, _mm_cmpeq_epi8,
     _mm_cmpgt_epi8, _mm_loadu_si128, _mm_madd_epi16, _mm_maddubs_epi16, _mm_movemask_epi8,
-    _mm_or_si128, _mm_set1_epi16, _mm_set1_epi32, _mm_set1_epi64x, _mm_set1_epi8, _mm_setr_epi8,
+    _mm_or_si128, _mm_set1_epi16, _mm_set1_epi32, _mm_set1_epi64x, _mm_set1_epi8,
     _mm_setzero_si128, _mm_shuffle_epi8, _mm_slli_epi64, _mm_srli_epi64, _mm_storeu_si128,
     _mm_sub_epi8,
 };
+use std::arch::x86_64::{_mm256_load_si256, _mm_load_si128};
 use std::ptr::copy_nonoverlapping;
-use crate::Ulid;
-use crate::ulid_decode::{ULID_INVALID_MASK, DecodeError};
 
 #[target_feature(enable = "avx2")]
 unsafe fn find_invalid_char_m256i(decoded: __m256i) -> DecodeError {
@@ -47,55 +51,55 @@ unsafe fn find_invalid_char_m128i(high: __m128i, low: __m128i) -> DecodeError {
 }
 
 /**
- * Decodes a ULID string into a `u128` using SSE4.1 instructions
+ * Decodes a ULID string into a `u128` using SSSE3 instructions
  * # Safety
  * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
  */
 #[target_feature(enable = "ssse3")]
 pub unsafe fn string_to_ulid_ssse3(input: &str) -> Result<Ulid, DecodeError> {
     // Convert from the string into an array of bytes
-    let mut high = shuffle_lookup_ssse3(input.as_bytes().as_ptr().offset(-6));
+    let mut high = encoding_lookup_ssse3(input.as_bytes().as_ptr().offset(-6));
     // Zero the extra six bytes at the end of the array
-    #[rustfmt::skip]
-        let actual_bytes_mask = _mm_setr_epi8(
-        0, 0, 0, 0, 0, 0,-1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1,
-    );
+    let actual_bytes_mask = _mm_load_si128(MASK_LAST_TEN_BYTES.as_ptr() as *const __m128i);
     high = _mm_and_si128(high, actual_bytes_mask);
 
-    let low = shuffle_lookup_ssse3(input.as_bytes().as_ptr().offset(10));
+    let low = encoding_lookup_ssse3(input.as_bytes().as_ptr().offset(10));
 
-    // Check that all of the characters were valid
-    let mask_max_high = _mm_loadu_si128(ULID_INVALID_MASK.as_ptr() as *const __m128i);
+    // Check that all the characters were valid
+    let mask_max_high = _mm_load_si128(ULID_INVALID_MASK.as_ptr() as *const __m128i);
     let invalid_high = _mm_and_si128(high, mask_max_high);
-    let valid_mask = _mm_movemask_epi8(_mm_cmpeq_epi8(invalid_high, _mm_setzero_si128()));
-    if valid_mask != 0xFFFF {
+    if !is_all_zeros(invalid_high) {
         return Err(find_invalid_char_m128i(high, low));
     }
 
-    let mask_max_low = _mm_loadu_si128((ULID_INVALID_MASK.as_ptr()).offset(16) as *const __m128i);
+    let mask_max_low = _mm_load_si128(ULID_INVALID_MASK.as_ptr().offset(16) as *const __m128i);
     let invalid_low = _mm_and_si128(low, mask_max_low);
-    let valid_mask = _mm_movemask_epi8(_mm_cmpeq_epi8(invalid_low, _mm_setzero_si128()));
-    if valid_mask != 0xFFFF {
+    if !is_all_zeros(invalid_low) {
         return Err(find_invalid_char_m128i(high, low));
     }
 
     // Rearrange the bits into an array
     let mut le_bytes: [u8; 20] = [0; 20];
-    madd_ulid_bytes_128(low, le_bytes.as_mut_ptr());
-    madd_ulid_bytes_128(high, le_bytes.as_mut_ptr().offset(10));
+    shift_bits_128(low, le_bytes.as_mut_ptr());
+    shift_bits_128(high, le_bytes.as_mut_ptr().offset(10));
 
     Ok(u128::from_le_bytes(le_bytes[0..16].try_into().unwrap()).into())
 }
 
 #[target_feature(enable = "ssse3")]
-unsafe fn shuffle_lookup_ssse3(ulid_str_ptr: *const u8) -> __m128i {
+unsafe fn is_all_zeros(value: __m128i) -> bool {
+    let valid_mask = _mm_movemask_epi8(_mm_cmpeq_epi8(value, _mm_setzero_si128()));
+    valid_mask == 0xFFFF
+}
+
+#[target_feature(enable = "ssse3")]
+unsafe fn encoding_lookup_ssse3(ulid_str_ptr: *const u8) -> __m128i {
     let encoded_bytes = _mm_loadu_si128(ulid_str_ptr as *const __m128i);
 
     let mut result = _mm_set1_epi8(-1);
 
     // Decode digits
-    let mut decoded_digits = _mm_sub_epi8(encoded_bytes, _mm_set1_epi8(0x30));
+    let mut decoded_digits = _mm_sub_epi8(encoded_bytes, _mm_set1_epi8(CHAR_0));
     let char_is_digit = _mm_and_si128(
         _mm_cmpgt_epi8(encoded_bytes, _mm_set1_epi8(0x29)),
         _mm_cmpgt_epi8(_mm_set1_epi8(0x3A), encoded_bytes),
@@ -106,14 +110,9 @@ unsafe fn shuffle_lookup_ssse3(ulid_str_ptr: *const u8) -> __m128i {
 
     let low_nibble = _mm_and_si128(encoded_bytes, _mm_set1_epi8(0x0F));
     // Decode AO and ao range
-    // [A, O] lookup table
-    #[rustfmt::skip]
-        let lookup_ao = _mm_setr_epi8(
-        -1, 0x0A, 0x0B,0x0C,0x0D,0x0E,0x0F,0x10,
-        0x11,0x01,0x12,0x13,0x01,0x14,0x15,0x00,
-    );
+    let lookup_ao = _mm_load_si128(AO_TABLE.as_ptr() as *const __m128i);
     let mut decoded_ao = _mm_shuffle_epi8(lookup_ao, low_nibble);
-    // Less than 'A', greater than 'O' and less than 'a', greater than 'o'
+    // Character is in [AO] or [ao]
     let char_in_ao = _mm_or_si128(
         _mm_and_si128(
             _mm_cmpgt_epi8(encoded_bytes, _mm_set1_epi8(0x40)),
@@ -129,15 +128,9 @@ unsafe fn shuffle_lookup_ssse3(ulid_str_ptr: *const u8) -> __m128i {
     result = _mm_or_si128(decoded_ao, not_in_ao);
 
     // Decode PZ and pz range
-    // Less than 'P', greater than 'Z' and less than 'p', greater than 'z'
-    // [P, Z] lookup table
-    #[rustfmt::skip]
-        let lookup_pz = _mm_setr_epi8(
-        0x16,0x17,0x18,0x19,0x1A,-1,0x1B,0x1C,
-        0x1D,0x1E,0x1F,-1,-1,-1,-1,-1,
-    );
+    let lookup_pz = _mm_load_si128(PZ_TABLE.as_ptr() as *const __m128i);
     let mut decoded_pz = _mm_shuffle_epi8(lookup_pz, low_nibble);
-    // Less than 'A', greater than 'O' and less than 'a', greater than 'o'
+    // Character is in [PZ] or [pz]
     let char_in_pz = _mm_or_si128(
         _mm_and_si128(
             _mm_cmpgt_epi8(encoded_bytes, _mm_set1_epi8(0x4F)),
@@ -161,7 +154,7 @@ unsafe fn shuffle_lookup_ssse3(ulid_str_ptr: *const u8) -> __m128i {
  * `result` MUST have 10 bytes of space
  */
 #[target_feature(enable = "ssse3")]
-unsafe fn madd_ulid_bytes_128(value: __m128i, result: *mut u8) {
+unsafe fn shift_bits_128(value: __m128i, result: *mut u8) {
     // Lower eight bytes (64 bits) of the value is:
     // 000hhhhh|000ggggg|000fffff|000eeeee|000ddddd|000ccccc|000bbbbb|000aaaaa
 
@@ -209,10 +202,10 @@ unsafe fn madd_ulid_bytes_128(value: __m128i, result: *mut u8) {
  */
 #[target_feature(enable = "avx2")]
 pub unsafe fn string_to_ulid_avx2(input: &str) -> Result<Ulid, DecodeError> {
-    let values = shuffle_lookup_avx2(input);
+    let values = encoding_lookup_avx2(input);
 
     // Check that all of the characters were valid
-    let mask_max = _mm256_loadu_si256(ULID_INVALID_MASK.as_ptr() as *const __m256i);
+    let mask_max = _mm256_load_si256(ULID_INVALID_MASK.as_ptr() as *const __m256i);
     let valid = _mm256_testz_si256(values, mask_max);
     if valid == 0 {
         return Err(find_invalid_char_m256i(values));
@@ -283,14 +276,14 @@ pub unsafe fn string_to_ulid_avx2(input: &str) -> Result<Ulid, DecodeError> {
 }
 
 #[target_feature(enable = "avx2")]
-unsafe fn shuffle_lookup_avx2(ulid_str: &str) -> __m256i {
+unsafe fn encoding_lookup_avx2(ulid_str: &str) -> __m256i {
     let encoded_bytes =
         _mm256_loadu_si256(ulid_str.as_bytes().as_ptr().offset(-6) as *const __m256i);
 
     let mut result = _mm256_set1_epi8(-1);
 
     // Decode digits
-    let mut decoded_digits = _mm256_sub_epi8(encoded_bytes, _mm256_set1_epi8(0x30));
+    let mut decoded_digits = _mm256_sub_epi8(encoded_bytes, _mm256_set1_epi8(CHAR_0));
     let char_is_digit = _mm256_and_si256(
         _mm256_cmpgt_epi8(encoded_bytes, _mm256_set1_epi8(0x29)),
         _mm256_cmpgt_epi8(_mm256_set1_epi8(0x3A), encoded_bytes),
@@ -365,9 +358,9 @@ unsafe fn shuffle_lookup_avx2(ulid_str: &str) -> __m256i {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::zip;
-    use crate::ulid_decode::DecodeError;
     use crate::ulid_decode::x86_64::*;
+    use crate::ulid_decode::DecodeError;
+    use std::iter::zip;
 
     static ULIDS: [&str; 9] = [
         "00000000000000000000000000",
@@ -392,16 +385,17 @@ mod tests {
         0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF,
     ];
 
-
     #[test]
     fn test_string_to_ulid_ssse3() {
         for (ulid_str, expected) in zip(&ULIDS, &U128S) {
             unsafe {
                 let actual = string_to_ulid_ssse3(ulid_str).unwrap();
                 assert_eq!(
-                    <Ulid as Into<u128>>::into(actual), *expected,
+                    <Ulid as Into<u128>>::into(actual),
+                    *expected,
                     "Got: {:#X} Expected: {:#X}",
-                    <Ulid as Into<u128>>::into(actual), *expected
+                    <Ulid as Into<u128>>::into(actual),
+                    *expected
                 );
             }
         }
@@ -413,9 +407,11 @@ mod tests {
             unsafe {
                 let actual = string_to_ulid_avx2(ulid_str).unwrap();
                 assert_eq!(
-                    <Ulid as Into<u128>>::into(actual), *expected,
+                    <Ulid as Into<u128>>::into(actual),
+                    *expected,
                     "Got: {:#X} Expected: {:#X}",
-                    <Ulid as Into<u128>>::into(actual), *expected
+                    <Ulid as Into<u128>>::into(actual),
+                    *expected
                 );
             }
         }
@@ -437,7 +433,7 @@ mod tests {
     static INVALID_CHAR_POSITION: [usize; 10] = [0, 0, 25, 25, 25, 25, 0, 0, 25, 25];
 
     #[test]
-    fn test_ulid_to_u128_ssse3_invalid_char() {
+    fn test_string_to_ulid_ssse3_invalid_char() {
         unsafe {
             for (ulid_str, expected) in zip(&INVALID_ULIDS, &INVALID_CHAR_POSITION) {
                 let actual = string_to_ulid_ssse3(ulid_str).unwrap_err();
@@ -452,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ulid_to_u128_avx2_invalid_char() {
+    fn test_string_to_ulid_avx2_invalid_char() {
         unsafe {
             for (ulid_str, expected) in zip(&INVALID_ULIDS, &INVALID_CHAR_POSITION) {
                 let actual = string_to_ulid_avx2(ulid_str).unwrap_err();
