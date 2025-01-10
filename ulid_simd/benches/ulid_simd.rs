@@ -1,4 +1,4 @@
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, Criterion};
 use rand;
 
 #[cfg(target_arch = "aarch64")]
@@ -11,69 +11,36 @@ use ulid_simd::ulid_encode::x86_64::{u128_to_ascii_avx2, u128_to_ascii_ssse3};
 use ulid_simd::ulid_encode::{u128_to_ascii_scalar, u128_to_ascii_scalar_unsafe};
 use ulid_simd::Ulid;
 
-const COUNT: usize = 1_000;
-
 fn encode(c: &mut Criterion) {
     let mut group = c.benchmark_group("encode");
-    group.throughput(Throughput::Elements(COUNT as u64));
 
-    group.bench_with_input(
-        BenchmarkId::new("u128_to_ascii_scalar", COUNT),
-        &COUNT,
-        |bencher, &count| {
-            let ulid_bytes = generate_ulid_bytes(count);
-            bencher.iter(|| {
-                for ulid in &ulid_bytes {
-                    let _result = u128_to_ascii_scalar(ulid);
-                }
-            });
-        }
-    );
-    group.bench_with_input(
-        BenchmarkId::new("u128_to_ascii_scalar_unsafe", COUNT),
-        &COUNT,
-        |bencher, &count| {
-            let ulid_bytes = generate_ulid_bytes(count);
-            bencher.iter(|| {
-                for ulid in &ulid_bytes {
-                    let _result = u128_to_ascii_scalar_unsafe(ulid);
-                }
-            });
-        }
-    );
+    let rand_u128 = rand::random::<u128>();
+
+    group.bench_function("u128_to_ascii_scalar", |bencher| {
+        bencher.iter(|| {
+            let _result = u128_to_ascii_scalar(&rand_u128);
+        });
+    });
+    group.bench_function("u128_to_ascii_scalar_unsafe", |bencher| {
+        bencher.iter(|| {
+            let _result = u128_to_ascii_scalar_unsafe(&rand_u128);
+        });
+    });
     #[cfg(all(target_arch = "x64_64", target_feature = "ssse3"))]
     {
-        group.bench_with_input(
-            BenchmarkId::new("u128_to_ascii_ssse3", crate::COUNT),
-            &crate::COUNT,
-            |bencher, &count| {
-                let ulid_bytes = crate::generate_ulid_bytes(count);
-                bencher.iter(|| {
-                    for ulid in &ulid_bytes {
-                        unsafe {
-                            let _result = u128_to_ascii_ssse3(ulid);
-                        }
-                    }
-                });
-            }
-        );
+        group.bench_function("u128_to_ascii_ssse3", |bencher| {
+            bencher.iter(|| unsafe {
+                let _result = u128_to_ascii_ssse3(&rand_u128);
+            });
+        });
     }
     #[cfg(all(target_arch = "x64_64", target_feature = "axv2"))]
     {
-        group.bench_with_input(
-            BenchmarkId::new("u128_to_ascii_avx2", crate::COUNT),
-            &crate::COUNT,
-            |bencher, &count| {
-                let ulid_bytes = crate::generate_ulid_bytes(count);
-                bencher.iter(|| {
-                    for ulid in &ulid_bytes {
-                        unsafe {
-                            let _result = u128_to_ascii_avx2(ulid);
-                        }
-                    }
-                });
-            }
-        );
+        group.bench_function("u128_to_ascii_avx2", |bencher| {
+            bencher.iter(|| unsafe {
+                let _result = u128_to_ascii_avx2(&rand_u128);
+            });
+        });
     }
 
     group.finish();
@@ -81,38 +48,21 @@ fn encode(c: &mut Criterion) {
 
 fn decode(c: &mut Criterion) {
     let mut group = c.benchmark_group("decode");
-    group.throughput(Throughput::Elements(COUNT as u64));
 
-    group.bench_with_input(
-        BenchmarkId::new("string_to_ulid_scalar", COUNT),
-        &COUNT,
-        |bencher, &count| {
-            let ulid_strings = generate_ulid_strings(count);
-            bencher.iter(|| {
-                for ulid in &ulid_strings {
-                    unsafe {
-                        let _result = string_to_ulid_scalar(ulid);
-                    }
-                }
-            });
-        }
-    );
+    let ulid_string = Ulid::from(rand::random::<u128>()).encode();
+
+    group.bench_function("string_to_ulid_scalar", |bencher| {
+        bencher.iter(|| unsafe {
+            let _result = string_to_ulid_scalar(&ulid_string);
+        });
+    });
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
-        group.bench_with_input(
-            BenchmarkId::new("string_to_ulid_neon", COUNT),
-            &COUNT,
-            |bencher, &count| {
-                let ulid_strings = generate_ulid_strings(count);
-                bencher.iter(|| {
-                    for ulid in &ulid_strings {
-                        unsafe {
-                            let _result = string_to_ulid_neon(ulid);
-                        }
-                    }
-                });
-            }
-        );
+        group.bench_function("string_to_ulid_neon", |bencher| {
+            bencher.iter(|| unsafe {
+                let _result = string_to_ulid_neon(&ulid_string);
+            });
+        });
     }
 }
 

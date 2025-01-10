@@ -33,10 +33,7 @@ pub unsafe fn string_to_ulid_neon(input: &str) -> Result<Ulid, DecodeError> {
     let right_chars_decoded = encoding_lookup(low_chars);
 
     // Check that all the characters were valid
-    let invalid_left = vandq_u8(
-        left_chars_decoded,
-        vld1q_u8(ULID_INVALID_MASK.as_ptr()),
-    );
+    let invalid_left = vandq_u8(left_chars_decoded, vld1q_u8(ULID_INVALID_MASK.as_ptr()));
     if !is_all_zeros(invalid_left) {
         return Err(DecodeError::InvalidCharacter(1));
     }
@@ -129,29 +126,21 @@ unsafe fn encoding_lookup(encoded_bytes: uint8x16_t) -> uint8x16_t {
     result
 }
 
-static SHIFT_1: Aligned<A16, [i8; 16]> = Aligned([
-        3, 6, 1, 4, 7, 2, 5, 0,
-        3, 6, 1, 4, 7, 2, 5, 0,
-]);
+static SHIFT_1: Aligned<A16, [i8; 16]> = Aligned([3, 6, 1, 4, 7, 2, 5, 0, 3, 6, 1, 4, 7, 2, 5, 0]);
 
-static SHIFT_2: Aligned<A16, [i8; 16]> = Aligned([
-        0, -2, 0, -4, -1, 0, -3, 0,
-        0, -2, 0, -4, -1, 0, -3, 0,
-]);
+static SHIFT_2: Aligned<A16, [i8; 16]> =
+    Aligned([0, -2, 0, -4, -1, 0, -3, 0, 0, -2, 0, -4, -1, 0, -3, 0]);
 
 static LOOKUP_1: Aligned<A16, [u8; 16]> = Aligned([
-    0xFF, 0xFF, 0xFF, 0x06, 0x04, 0x03, 0x01, 0x00,
-    0xFF, 0xFF, 0xFF, 0x0E, 0x0C, 0x0B, 0x09, 0x08,
+    0xFF, 0xFF, 0xFF, 0x06, 0x04, 0x03, 0x01, 0x00, 0xFF, 0xFF, 0xFF, 0x0E, 0x0C, 0x0B, 0x09, 0x08,
 ]);
 
 static LOOKUP_2: Aligned<A16, [u8; 16]> = Aligned([
-    0xFF, 0xFF, 0xFF, 0x07, 0x05, 0xFF, 0x02, 0xFF,
-    0xFF, 0xFF, 0xFF, 0x0F, 0x0D, 0xFF, 0x0A, 0xFF,
+    0xFF, 0xFF, 0xFF, 0x07, 0x05, 0xFF, 0x02, 0xFF, 0xFF, 0xFF, 0xFF, 0x0F, 0x0D, 0xFF, 0x0A, 0xFF,
 ]);
 
 static LOOKUP_3: Aligned<A16, [u8; 16]> = Aligned([
-    0xFF, 0xFF, 0xFF, 0xFF, 0x06, 0x04, 0x03, 0x01,
-    0xFF, 0xFF, 0xFF, 0xFF, 0x0E, 0x0C, 0x0B, 0x09,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x06, 0x04, 0x03, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0x0E, 0x0C, 0x0B, 0x09,
 ]);
 
 static SHIFT_64: Aligned<A16, [u8; 16]> = Aligned([
