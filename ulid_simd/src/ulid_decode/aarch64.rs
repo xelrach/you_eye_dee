@@ -13,7 +13,7 @@ pub static FINAL_BYTES_SHIFT: [u8; 16] = [
 ];
 
 static STRIP_UNUSED: Aligned<A16, [u8; 16]> = Aligned([
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 ]);
 
 /**
@@ -23,29 +23,27 @@ static STRIP_UNUSED: Aligned<A16, [u8; 16]> = Aligned([
  */
 #[target_feature(enable = "neon")]
 pub unsafe fn string_to_ulid_neon(input: &str) -> Result<Ulid, DecodeError> {
-    let high_chars = vld1q_u8(input.as_bytes().as_ptr());
+    let high_chars = vld1q_u8(input.as_bytes().as_ptr().offset(-6));
     let low_chars = vld1q_u8(input.as_bytes().as_ptr().offset(10));
 
-    let le_low_chars = vqtbl1q_u8(low_chars, vld1q_u8(BE_TO_LE.as_ptr()));
-    let le_high_chars = vqtbl1q_u8(high_chars, vld1q_u8(BE_TO_LE.as_ptr().offset(16)));
-
-    let le_left_bytes_decoded = encoding_lookup(le_low_chars);
-    let mut le_right_bytes_decoded = encoding_lookup(le_high_chars);
+    let mut left_chars_decoded = encoding_lookup(high_chars);
     // Remove the extra 6 bytes
-    le_right_bytes_decoded = vandq_u8(le_right_bytes_decoded, vld1q_u8(STRIP_UNUSED.as_ptr()));
+    left_chars_decoded = vandq_u8(left_chars_decoded, vld1q_u8(STRIP_UNUSED.as_ptr()));
+    // 16 characters
+    let right_chars_decoded = encoding_lookup(low_chars);
 
     // Check that all the characters were valid
     let invalid_left = vandq_u8(
-        le_left_bytes_decoded,
-        vld1q_u8(ULID_INVALID_MASK_LE.as_ptr()),
+        left_chars_decoded,
+        vld1q_u8(ULID_INVALID_MASK.as_ptr()),
     );
     if !is_all_zeros(invalid_left) {
         return Err(DecodeError::InvalidCharacter(1));
     }
 
     let invalid_right = vandq_u8(
-        le_right_bytes_decoded,
-        vld1q_u8(ULID_INVALID_MASK_LE.as_ptr().offset(16)),
+        right_chars_decoded,
+        vld1q_u8(ULID_INVALID_MASK.as_ptr().offset(16)),
     );
     if !is_all_zeros(invalid_right) {
         return Err(DecodeError::InvalidCharacter(1));
@@ -53,13 +51,14 @@ pub unsafe fn string_to_ulid_neon(input: &str) -> Result<Ulid, DecodeError> {
 
     // Shift and rearrange the bits into an array
     let mut le_bytes: [u8; 26] = [0; 26];
-    // 0000000000 000000FEDCBA0000
-    let le_right_bytes_shifted = shift_bits(le_right_bytes_decoded);
-    vst1q_u8(le_bytes.as_mut_ptr().offset(10), le_right_bytes_shifted);
-    // 000000PONM LKJIHG
-    let le_left_bytes_shifted = shift_bits(le_left_bytes_decoded);
-    // 000000PONM LKJIHGFEDCBA0000
-    vst1q_u8(le_bytes.as_mut_ptr(), le_left_bytes_shifted);
+    // 000000FEDCBA0000
+    let high_bytes_shifted = shift_bits(left_chars_decoded);
+    // 0000000000000000FEDCBA0000
+    vst1q_u8(le_bytes.as_mut_ptr().offset(10), high_bytes_shifted);
+    // 000000PONMLKJIHG
+    let low_bytes_shifted = shift_bits(right_chars_decoded);
+    // 000000PONMLKJIHGFEDCBA0000
+    vst1q_u8(le_bytes.as_mut_ptr(), low_bytes_shifted);
 
     Ok(u128::from_le_bytes(le_bytes[6..22].try_into().unwrap()).into())
 }
@@ -130,47 +129,56 @@ unsafe fn encoding_lookup(encoded_bytes: uint8x16_t) -> uint8x16_t {
     result
 }
 
-static SHIFT_1: Aligned<A16, [i8; 16]> = Aligned([0, 5, 2, 7, 4, 1, 6, 3, 0, 5, 2, 7, 4, 1, 6, 3]);
+static SHIFT_1: Aligned<A16, [i8; 16]> = Aligned([
+        3, 6, 1, 4, 7, 2, 5, 0,
+        3, 6, 1, 4, 7, 2, 5, 0,
+]);
 
-static SHIFT_2: Aligned<A16, [i8; 16]> =
-    Aligned([0, -3, 0, -1, -4, 0, -2, 0, 0, -3, 0, -1, -4, 0, -2, 0]);
+static SHIFT_2: Aligned<A16, [i8; 16]> = Aligned([
+        0, -2, 0, -4, -1, 0, -3, 0,
+        0, -2, 0, -4, -1, 0, -3, 0,
+]);
 
 static LOOKUP_1: Aligned<A16, [u8; 16]> = Aligned([
-    0xFF, 0xFF, 0xFF, 0x01, 0x03, 0x04, 0x06, 0x07, 0xFF, 0xFF, 0xFF, 0x09, 0x0B, 0x0C, 0x0E, 0x0F,
+    0xFF, 0xFF, 0xFF, 0x06, 0x04, 0x03, 0x01, 0x00,
+    0xFF, 0xFF, 0xFF, 0x0E, 0x0C, 0x0B, 0x09, 0x08,
 ]);
 
 static LOOKUP_2: Aligned<A16, [u8; 16]> = Aligned([
-    0xFF, 0xFF, 0xFF, 0x00, 0x02, 0xFF, 0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0x08, 0x0A, 0xFF, 0x0D, 0xFF,
+    0xFF, 0xFF, 0xFF, 0x07, 0x05, 0xFF, 0x02, 0xFF,
+    0xFF, 0xFF, 0xFF, 0x0F, 0x0D, 0xFF, 0x0A, 0xFF,
 ]);
 
 static LOOKUP_3: Aligned<A16, [u8; 16]> = Aligned([
-    0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x03, 0x04, 0x06, 0xFF, 0xFF, 0xFF, 0xFF, 0x09, 0x0B, 0x0C, 0x0E,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x06, 0x04, 0x03, 0x01,
+    0xFF, 0xFF, 0xFF, 0xFF, 0x0E, 0x0C, 0x0B, 0x09,
 ]);
 
 static SHIFT_64: Aligned<A16, [u8; 16]> = Aligned([
-    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x03, 0x04, 0x05, 0x06, 0x07,
 ]);
 
 /**
- * Shifts bits from the 5-bit representation into normal bytes
+ * Shifts bits from the 5-bit representation into normal bytes.
+ * Returns an array with six 0 bytes followed by ten bytes of data
  * # Safety
  * No restrictions on caller
  */
 #[target_feature(enable = "neon")]
 unsafe fn shift_bits(value: uint8x16_t) -> uint8x16_t {
     // Eight bytes of the value is:
-    // 000jklmn|000efghi|000Zabcd|000UVWXY|000PQRST|000KLMNO|000FGHIJ|000ABCDE
+    // 000ABCDE|000FGHIJ|000KLMNO|000PQRST|000UVWXY|000Zabcd|000efghi|000jklmn
 
-    //     0   |    5   |    2   |    7   |    4   |    1   |    6   |    3
-    // 000jklmn|ghi00000|0Zabcd00|Y0000000|QRST0000|00KLMNO0|IJ000000|ABCDE000
+    //     3   |    6   |    1   |    4   |    7   |    2   |    5   |    0
+    // ABCDE000|IJ000000|00KLMNO0|QRST0000|Y0000000|0Zabcd00|ghi00000|000jklmn
     let shift_1 = vshlq_u8(value, vld1q_s8(SHIFT_1.as_ptr()));
     // 00000000|00000000|00000000|ghi00000|Y0000000|QRST0000|IJ000000|ABCDE000
     let lookup_1 = vqtbl1q_u8(shift_1, vld1q_u8(LOOKUP_1.as_ptr()));
     // 00000000|00000000|00000000|000jklmn|0Zabcd00|00000000|00KLMNO0|00000000
     let lookup_2 = vqtbl1q_u8(shift_1, vld1q_u8(LOOKUP_2.as_ptr()));
 
-    //     0   |   -3   |    0   |   -1   |   -4   |    0   |   -2   |    0
-    // 000jklmn|000000ef|000Zabcd|0000UVWX|0000000P|000KLMNO|00000FGH|000ABCDE
+    //     0   |   -2   |    0   |   -4   |   -1   |    0   |   -3   |    0
+    // 000ABCDE|00000FGH|000KLMNO|0000000P|0000UVWX|000Zabcd|000000ef|000jklmn
     let shift_2 = vshlq_u8(value, vld1q_s8(SHIFT_2.as_ptr()));
     // 00000000|00000000|00000000|00000000|000000ef|0000UVWX|0000000P|00000FGH
     let lookup_3 = vqtbl1q_u8(shift_2, vld1q_u8(LOOKUP_3.as_ptr()));
@@ -189,9 +197,10 @@ mod tests {
     use crate::Ulid;
     use std::iter::zip;
 
-    static ULIDS: [&str; 9] = [
+    static ULIDS: [&str; 10] = [
         "00000000000000000000000000",
         "0000000000ZZZZZZzzzzzzzzZZ",
+        "01081G81860W40J2GB1G6GW3RG",
         "0123456789ABCDEFGHJKMNPQRS",
         "7TVWXYZ0123456789ABCDEFGHJ",
         "0123456789abcdefghjkmnpqrs",
@@ -200,9 +209,11 @@ mod tests {
         "7ZZZZZZZZZ0000000000000000",
         "7ZZZZZZZZZZZZZZZZZZZZZZZZZ",
     ];
-    static U128S: [u128; 9] = [
+
+    static U128S: [u128; 10] = [
         0x00000000000000000000000000000000,
         0x000000000000FFFFFFFFFFFFFFFFFFFF,
+        0x0102030405060708090A0B0C0D0E0F10,
         0x0110C8531D0952D8D73E1194E95B5F19,
         0xFADF3BEF8022190A63A12A5B1AE7C232,
         0x0110C8531D0952D8D73E1194E95B5F19,
@@ -228,8 +239,9 @@ mod tests {
         }
     }
 
-    static INVALID_ULIDS: [&str; 10] = [
+    static INVALID_ULIDS: [&str; 11] = [
         "8ZZZZZZZZZZZZZZZZZZZZZZZZZ",
+        "7:ZZZZZZZZZZZZZZZZZZZZZZZZ",
         "\00000000000000000000000000",
         "0000000000000000000000000/",
         "0000000000000000000000000:",
@@ -241,7 +253,7 @@ mod tests {
         "0000000000000000000000000u",
     ];
 
-    static INVALID_CHAR_POSITION: [usize; 10] = [0, 0, 25, 25, 25, 25, 0, 0, 25, 25];
+    static INVALID_CHAR_POSITION: [usize; 11] = [0, 1, 0, 25, 25, 25, 25, 0, 0, 25, 25];
 
     #[test]
     fn test_string_to_ulid_neon_invalid_char() {

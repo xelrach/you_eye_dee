@@ -46,24 +46,24 @@ pub fn u128_to_ascii_scalar(ulid: &u128) -> String {
 
 /**
  * Encodes a `u128` into a ULID string
- * # Safety
- * Code uses raw pointers and `get_unchecked`. No safety requirements for caller.
  */
-pub unsafe fn u128_to_ascii_scalar_unsafe(ulid: &u128) -> String {
+pub fn u128_to_ascii_scalar_unsafe(ulid: &u128) -> String {
     let mut chars: Box<[u8; ULID_LENGTH]> = Box::new([0x00; ULID_LENGTH]);
-    for i in 0..ULID_LENGTH {
-        let mut shifted: usize = (ulid >> (125 - i * 5)) as usize;
-        shifted &= 0x1F;
+    unsafe {
+        for i in 0..ULID_LENGTH {
+            let mut shifted: usize = (ulid >> (125 - i * 5)) as usize;
+            shifted &= 0x1F;
 
-        let character = CROCKFORD_BASE32_ENCODE.get_unchecked(shifted);
-        *chars.get_unchecked_mut(i) = *character;
+            let character = CROCKFORD_BASE32_ENCODE.get_unchecked(shifted);
+            *chars.get_unchecked_mut(i) = *character;
+        }
+
+        String::from_raw_parts(
+            Box::<[u8; 26]>::into_raw(chars) as *mut u8,
+            ULID_LENGTH,
+            ULID_LENGTH,
+        )
     }
-
-    String::from_raw_parts(
-        Box::<[u8; 26]>::into_raw(chars) as *mut u8,
-        ULID_LENGTH,
-        ULID_LENGTH,
-    )
 }
 
 #[cfg(test)]
@@ -72,9 +72,10 @@ mod tests {
 
     use crate::ulid_encode::*;
 
-    static ULIDS: [&str; 7] = [
+    static ULIDS: [&str; 8] = [
         "00000000000000000000000000",
         "0000000000ZZZZZZZZZZZZZZZZ",
+        "01081G81860W40J2GB1G6GW3RG",
         "0HHHHHHHHHHHHHHHHHHHHHHHHH",
         "0123456789ABCDEFGHJKMNPQRS",
         "7TVWXYZ0123456789ABCDEFGHJ",
@@ -82,9 +83,10 @@ mod tests {
         "7ZZZZZZZZZZZZZZZZZZZZZZZZZ",
     ];
 
-    static U128S: [u128; 7] = [
+    static U128S: [u128; 8] = [
         0x00000000000000000000000000000000,
         0x000000000000FFFFFFFFFFFFFFFFFFFF,
+        0x0102030405060708090A0B0C0D0E0F10,
         0x118C6318C6318C6318C6318C6318C631,
         0x0110C8531D0952D8D73E1194E95B5F19,
         0xFADF3BEF8022190A63A12A5B1AE7C232,

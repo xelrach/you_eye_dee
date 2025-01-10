@@ -11,93 +11,14 @@ use ulid_simd::ulid_encode::x86_64::{u128_to_ascii_avx2, u128_to_ascii_ssse3};
 use ulid_simd::ulid_encode::{u128_to_ascii_scalar, u128_to_ascii_scalar_unsafe};
 use ulid_simd::Ulid;
 
-fn decode_string_to_ulid_scalar(criterion: &mut Criterion) {
-    const COUNT: usize = 10_000;
-    let mut group = criterion.benchmark_group("decode_string_to_ulid_scalar");
-    group.throughput(Throughput::Elements(COUNT as u64));
-    group.bench_with_input(
-        BenchmarkId::from_parameter(COUNT),
-        &COUNT,
-        |bencher, &count| {
-            let ulid_strings = generate_ulid_strings(count);
-            bencher.iter(|| {
-                for ulid in &ulid_strings {
-                    let _result = string_to_ulid_scalar(ulid);
-                }
-            });
-        },
-    );
-}
+const COUNT: usize = 1_000;
 
-#[cfg(target_arch = "x86_64")]
-fn decode_string_to_ulid_ssse3(criterion: &mut Criterion) {
-    const COUNT: usize = 10_000;
-    let mut group = criterion.benchmark_group("decode_string_to_ulid_ssse3");
+fn encode(c: &mut Criterion) {
+    let mut group = c.benchmark_group("encode");
     group.throughput(Throughput::Elements(COUNT as u64));
-    group.bench_with_input(
-        BenchmarkId::from_parameter(COUNT),
-        &COUNT,
-        |bencher, &count| {
-            let ulid_strings = generate_ulid_strings(count);
-            bencher.iter(|| {
-                for ulid in &ulid_strings {
-                    unsafe {
-                        let _result = string_to_ulid_ssse3(ulid);
-                    }
-                }
-            });
-        },
-    );
-}
 
-#[cfg(target_arch = "x86_64")]
-fn decode_string_to_ulid_avx2(criterion: &mut Criterion) {
-    const COUNT: usize = 10_000;
-    let mut group = criterion.benchmark_group("decode_string_to_ulid_avx2");
-    group.throughput(Throughput::Elements(COUNT as u64));
     group.bench_with_input(
-        BenchmarkId::from_parameter(COUNT),
-        &COUNT,
-        |bencher, &count| {
-            let ulid_strings = generate_ulid_strings(count);
-            bencher.iter(|| {
-                for ulid in &ulid_strings {
-                    unsafe {
-                        let _result = string_to_ulid_avx2(ulid);
-                    }
-                }
-            });
-        },
-    );
-}
-
-#[cfg(target_arch = "aarch64")]
-fn decode_string_to_ulid_neon(criterion: &mut Criterion) {
-    const COUNT: usize = 10_000;
-    let mut group = criterion.benchmark_group("decode_string_to_ulid_neon");
-    group.throughput(Throughput::Elements(COUNT as u64));
-    group.bench_with_input(
-        BenchmarkId::from_parameter(COUNT),
-        &COUNT,
-        |bencher, &count| {
-            let ulid_strings = generate_ulid_strings(count);
-            bencher.iter(|| {
-                for ulid in &ulid_strings {
-                    unsafe {
-                        let _result = string_to_ulid_neon(ulid);
-                    }
-                }
-            });
-        },
-    );
-}
-
-fn encode_u128_to_ascii_scalar(criterion: &mut Criterion) {
-    const COUNT: usize = 10_000;
-    let mut group = criterion.benchmark_group("encode_u128_to_ascii_scalar");
-    group.throughput(Throughput::Elements(COUNT as u64));
-    group.bench_with_input(
-        BenchmarkId::from_parameter(COUNT),
+        BenchmarkId::new("u128_to_ascii_scalar", COUNT),
         &COUNT,
         |bencher, &count| {
             let ulid_bytes = generate_ulid_bytes(count);
@@ -106,70 +27,93 @@ fn encode_u128_to_ascii_scalar(criterion: &mut Criterion) {
                     let _result = u128_to_ascii_scalar(ulid);
                 }
             });
-        },
+        }
     );
-}
-
-fn encode_u128_to_ascii_scalar_unsafe(criterion: &mut Criterion) {
-    const COUNT: usize = 10_000;
-    let mut group = criterion.benchmark_group("encode_u128_to_ascii_scalar_unsafe");
-    group.throughput(Throughput::Elements(COUNT as u64));
     group.bench_with_input(
-        BenchmarkId::from_parameter(COUNT),
+        BenchmarkId::new("u128_to_ascii_scalar_unsafe", COUNT),
         &COUNT,
         |bencher, &count| {
             let ulid_bytes = generate_ulid_bytes(count);
             bencher.iter(|| {
                 for ulid in &ulid_bytes {
-                    unsafe {
-                        let _result = u128_to_ascii_scalar_unsafe(ulid);
-                    }
+                    let _result = u128_to_ascii_scalar_unsafe(ulid);
                 }
             });
-        },
+        }
     );
+    #[cfg(all(target_arch = "x64_64", target_feature = "ssse3"))]
+    {
+        group.bench_with_input(
+            BenchmarkId::new("u128_to_ascii_ssse3", crate::COUNT),
+            &crate::COUNT,
+            |bencher, &count| {
+                let ulid_bytes = crate::generate_ulid_bytes(count);
+                bencher.iter(|| {
+                    for ulid in &ulid_bytes {
+                        unsafe {
+                            let _result = u128_to_ascii_ssse3(ulid);
+                        }
+                    }
+                });
+            }
+        );
+    }
+    #[cfg(all(target_arch = "x64_64", target_feature = "axv2"))]
+    {
+        group.bench_with_input(
+            BenchmarkId::new("u128_to_ascii_avx2", crate::COUNT),
+            &crate::COUNT,
+            |bencher, &count| {
+                let ulid_bytes = crate::generate_ulid_bytes(count);
+                bencher.iter(|| {
+                    for ulid in &ulid_bytes {
+                        unsafe {
+                            let _result = u128_to_ascii_avx2(ulid);
+                        }
+                    }
+                });
+            }
+        );
+    }
+
+    group.finish();
 }
 
-#[cfg(target_arch = "x86_64")]
-fn encode_u128_to_ascii_ssse3(criterion: &mut Criterion) {
-    const COUNT: usize = 10_000;
-    let mut group = criterion.benchmark_group("encode_u128_to_ascii_ssse3");
+fn decode(c: &mut Criterion) {
+    let mut group = c.benchmark_group("decode");
     group.throughput(Throughput::Elements(COUNT as u64));
-    group.bench_with_input(
-        BenchmarkId::from_parameter(COUNT),
-        &COUNT,
-        |bencher, &count| {
-            let ulid_bytes = generate_ulid_bytes(count);
-            bencher.iter(|| {
-                for ulid in &ulid_bytes {
-                    unsafe {
-                        let _result = u128_to_ascii_ssse3(ulid);
-                    }
-                }
-            });
-        },
-    );
-}
 
-#[cfg(target_arch = "x86_64")]
-fn encode_u128_to_ascii_avx2(criterion: &mut Criterion) {
-    const COUNT: usize = 10_000;
-    let mut group = criterion.benchmark_group("encode_u128_to_ascii_avx2");
-    group.throughput(Throughput::Elements(COUNT as u64));
     group.bench_with_input(
-        BenchmarkId::from_parameter(COUNT),
+        BenchmarkId::new("string_to_ulid_scalar", COUNT),
         &COUNT,
         |bencher, &count| {
-            let ulid_bytes = generate_ulid_bytes(count);
+            let ulid_strings = generate_ulid_strings(count);
             bencher.iter(|| {
-                for ulid in &ulid_bytes {
+                for ulid in &ulid_strings {
                     unsafe {
-                        let _result = u128_to_ascii_avx2(ulid);
+                        let _result = string_to_ulid_scalar(ulid);
                     }
                 }
             });
-        },
+        }
     );
+    #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+    {
+        group.bench_with_input(
+            BenchmarkId::new("string_to_ulid_neon", COUNT),
+            &COUNT,
+            |bencher, &count| {
+                let ulid_strings = generate_ulid_strings(count);
+                bencher.iter(|| {
+                    for ulid in &ulid_strings {
+                        unsafe {
+                            let _result = string_to_ulid_neon(ulid);
+                        }
+                    }
+                });
+            }
+        );
+    }
 }
 
 fn generate_ulid_strings(count: usize) -> Vec<String> {
@@ -192,35 +136,5 @@ fn generate_ulid_bytes(count: usize) -> Vec<u128> {
     ulids
 }
 
-#[cfg(target_arch = "x86_64")]
-criterion_group!(
-    ulid_decode,
-    decode_string_to_ulid_scalar,
-    decode_string_to_ulid_ssse3,
-    decode_string_to_ulid_avx2,
-);
-
-#[cfg(target_arch = "aarch64")]
-criterion_group!(
-    ulid_decode,
-    decode_string_to_ulid_scalar,
-    decode_string_to_ulid_neon,
-);
-
-#[cfg(target_arch = "x86_64")]
-criterion_group!(
-    ulid_encode,
-    encode_u128_to_ascii_scalar,
-    encode_u128_to_ascii_scalar_unsafe,
-    encode_u128_to_ascii_ssse3,
-    encode_u128_to_ascii_avx2,
-);
-
-#[cfg(target_arch = "aarch64")]
-criterion_group!(
-    ulid_encode,
-    encode_u128_to_ascii_scalar,
-    encode_u128_to_ascii_scalar_unsafe,
-);
-
-criterion_main!(ulid_decode, ulid_encode);
+criterion_group!(ulid_foo, encode, decode);
+criterion_main!(ulid_foo);
