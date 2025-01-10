@@ -5,6 +5,7 @@ mod consts;
 pub mod x86_64;
 
 use crate::{Ulid, ULID_LENGTH};
+use std::arch::is_aarch64_feature_detected;
 use std::sync::OnceLock;
 
 static CROCKFORD_BASE32: [u8; 256] = include!("../../resources/crockford_base32_decode.txt");
@@ -36,7 +37,7 @@ pub fn string_to_ulid(input: &str) -> Result<Ulid, DecodeError> {
         #[cfg(target_arch = "aarch64")]
         {
             if is_aarch64_feature_detected!("neon") {
-                return aarch64::ulid_to_u128_neon;
+                return aarch64::string_to_ulid_neon;
             }
         }
 

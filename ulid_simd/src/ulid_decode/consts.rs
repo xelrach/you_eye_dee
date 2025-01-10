@@ -51,13 +51,13 @@ pub static PZ_TABLE: Aligned<A16, [u8; 16]> = Aligned([
     0xFF, // Invalid
 ]);
 
-pub const CHAR_0: i8 = 0x30;
-pub const CHAR_9: i8 = 0x39;
-pub const CHAR_UPPER_A: i8 = 0x41;
-pub const CHAR_UPPER_O: i8 = 0x4F;
-pub const CHAR_UPPER_P: i8 = 0x50;
-pub const CHAR_UPPER_Z: i8 = 0x5A;
-pub const CHAR_LOWER_A: i8 = 0x61;
-pub const CHAR_LOWER_O: i8 = 0x6F;
-pub const CHAR_LOWER_P: i8 = 0x70;
-pub const CHAR_LOWER_Z: i8 = 0x7A;
+pub const CHAR_0: u8 = 0x30;
+pub const CHAR_9: u8 = 0x39;
+pub const CHAR_UPPER_A: u8 = 0x41;
+pub const CHAR_UPPER_O: u8 = 0x4F;
+pub const CHAR_UPPER_P: u8 = 0x50;
+pub const CHAR_UPPER_Z: u8 = 0x5A;
+pub const CHAR_LOWER_A: u8 = 0x61;
+pub const CHAR_LOWER_O: u8 = 0x6F;
+pub const CHAR_LOWER_P: u8 = 0x70;
+pub const CHAR_LOWER_Z: u8 = 0x7A;
