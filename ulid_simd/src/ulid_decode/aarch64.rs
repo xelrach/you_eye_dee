@@ -1,110 +1,67 @@
 use crate::ulid_decode::consts::*;
 use crate::ulid_decode::DecodeError;
 use crate::Ulid;
+use aligned::{Aligned, A16};
 use std::arch::aarch64::{
-    uint8x16_t, vandq_u16, vandq_u32, vandq_u64, vandq_u8, vceqq_u8, vcgeq_u8, vcleq_u8,
-    vdupq_n_u16, vdupq_n_u32, vdupq_n_u64, vdupq_n_u8, vget_lane_u64, vld1q_u8, vmvnq_u8,
-    vorrq_u16, vorrq_u32, vorrq_u64, vorrq_u8, vqtbl1q_u8, vreinterpret_u64_u8,
-    vreinterpretq_s8_u8, vreinterpretq_u16_u8, vreinterpretq_u32_u16, vreinterpretq_u64_u32,
-    vreinterpretq_u8_s8, vreinterpretq_u8_u64, vshlq_n_u16, vshlq_n_u32, vshlq_n_u64, vshlq_n_u8,
-    vshrn_n_u16, vst1q_u8, vsubq_s8,
+    uint8x16_t, vandq_u8, vceqq_u8, vcgeq_u8, vcleq_u8, vdupq_n_u8, vget_lane_u64, vld1q_s8,
+    vld1q_u8, vmvnq_u8, vorrq_u8, vqtbl1q_u8, vreinterpret_u64_u8, vreinterpretq_s8_u8,
+    vreinterpretq_u16_u8, vreinterpretq_u8_s8, vshlq_u8, vshrn_n_u16, vst1q_u8, vsubq_s8,
 };
 
 pub static FINAL_BYTES_SHIFT: [u8; 16] = [
     0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 ];
 
-/*
-#[target_feature(enable = "neon")]
-pub unsafe fn string_to_ulid_neon(input: &str) -> Result<Ulid, DecodeError> {
-    let input = vld1_u8_x2(input.as_ptr());
-
-    let field_a = lookup(input.val[0], error_a);
-    let field_b = lookup(input.val[1], error_b);
-    let field_c = lookup(input.val[2], error_c);
-    let field_d = lookup(input.val[3], error_d);
-
-    let mut result: uint8x8x3_t;
-    result.val[0] = vorr_u8(vshr_n_u8(field_b, 4), vshl_n_u8(field_a, 2));
-    result.val[1] = vorr_u8(vshr_n_u8(field_c, 2), vshl_n_u8(field_b, 4));
-    result.val[2] = vorr_u8(field_d, vshl_n_u8(field_c, 6));
-}
-
-unsafe fn lookup_pshufb_bitmask(input: uint8x8_t) -> uint8x8_t {
-
-const uint8x8_t higher_nibble = vshr_n_u8(input, 4);
-const uint8x8_t lower_nibble = vand_u8(input, packed_byte(0x0f));
-
-const uint8x8x2_t shiftLUT = {
-0, 0, 19, 4, uint8_t(- 65), uint8_t( - 65), uint8_t( - 71), uint8_t( - 71),
-0, 0, 0, 0,   0, 0, 0, 0};
-
-const uint8x8x2_t maskLUT = {
-/* 0        : 0b1010_1000*/ 0xa8,
-/* 1 .. 9   : 0b1111_1000*/ 0xf8, 0xf8, 0xf8, 0xf8, 0xf8, 0xf8, 0xf8, 0xf8, 0xf8,
-/* 10       : 0b1111_0000*/ 0xf0,
-/* 11       : 0b0101_0100*/ 0x54,
-/* 12 .. 14 : 0b0101_0000*/ 0x50, 0x50, 0x50,
-/* 15       : 0b0101_0100*/ 0x54
-};
-
-const uint8x8x2_t bitposLUT = {
-0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
-0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
-};
-
-const uint8x8_t sh = vtbl2_u8(shiftLUT, higher_nibble);
-const uint8x8_t eq_2f = vceq_u8(input, packed_byte(0x2f));
-const uint8x8_t shift = vbsl_u8(eq_2f, packed_byte(16), sh);
-
-const uint8x8_t M = vtbl2_u8(maskLUT,   lower_nibble);
-const uint8x8_t bit = vtbl2_u8(bitposLUT, higher_nibble);
-
-error = vceq_u8(vand_u8(M, bit), packed_byte(0));
-
-const uint8x8_t result = vadd_u8(input, shift);
-
-return result;
-}
- */
+static STRIP_UNUSED: Aligned<A16, [u8; 16]> = Aligned([
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+]);
 
 /**
  * Decodes a ULID string into a `Ulid`
  * # Safety
- * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
+ * Code uses aarch64 intrinsics. No safety requirements for caller.
  */
 #[target_feature(enable = "neon")]
 pub unsafe fn string_to_ulid_neon(input: &str) -> Result<Ulid, DecodeError> {
-    // Convert from the string into an array of bytes
-    let mut high = encoding_lookup(input.as_bytes().as_ptr().offset(-6));
-    // Zero the extra six bytes at the start of the array
-    #[rustfmt::skip]
-    let actual_bytes_mask = vld1q_u8(MASK_LAST_TEN_BYTES.as_ptr());
-    high = vandq_u8(high, actual_bytes_mask);
+    let high_chars = vld1q_u8(input.as_bytes().as_ptr());
+    let low_chars = vld1q_u8(input.as_bytes().as_ptr().offset(10));
 
-    let low = encoding_lookup(input.as_bytes().as_ptr().offset(10));
+    let le_low_chars = vqtbl1q_u8(low_chars, vld1q_u8(BE_TO_LE.as_ptr()));
+    let le_high_chars = vqtbl1q_u8(high_chars, vld1q_u8(BE_TO_LE.as_ptr().offset(16)));
+
+    let le_left_bytes_decoded = encoding_lookup(le_low_chars);
+    let mut le_right_bytes_decoded = encoding_lookup(le_high_chars);
+    // Remove the extra 6 bytes
+    le_right_bytes_decoded = vandq_u8(le_right_bytes_decoded, vld1q_u8(STRIP_UNUSED.as_ptr()));
 
     // Check that all the characters were valid
-    let mask_max_high = vld1q_u8(ULID_INVALID_MASK.as_ptr());
-    let invalid_high = vandq_u8(high, mask_max_high);
-    if !is_all_zeros(invalid_high) {
+    let invalid_left = vandq_u8(
+        le_left_bytes_decoded,
+        vld1q_u8(ULID_INVALID_MASK_LE.as_ptr()),
+    );
+    if !is_all_zeros(invalid_left) {
         return Err(DecodeError::InvalidCharacter(1));
     }
 
-    let mask_max_low = vld1q_u8((ULID_INVALID_MASK.as_ptr()).offset(16));
-    let invalid_low = vandq_u8(low, mask_max_low);
-    if !is_all_zeros(invalid_low) {
+    let invalid_right = vandq_u8(
+        le_right_bytes_decoded,
+        vld1q_u8(ULID_INVALID_MASK_LE.as_ptr().offset(16)),
+    );
+    if !is_all_zeros(invalid_right) {
         return Err(DecodeError::InvalidCharacter(1));
     }
 
     // Shift and rearrange the bits into an array
-    let mut be_bytes: [u8; 20] = [0; 20];
-    let high_bytes = shift_bits(high);
-    vst1q_u8(be_bytes.as_mut_ptr(), high_bytes);
-    let low_bytes = shift_bits(low);
-    vst1q_u8(be_bytes.as_mut_ptr().offset(6), low_bytes);
+    let mut le_bytes: [u8; 26] = [0; 26];
+    // 0000000000 000000FEDCBA0000
+    let le_right_bytes_shifted = shift_bits(le_right_bytes_decoded);
+    vst1q_u8(le_bytes.as_mut_ptr().offset(10), le_right_bytes_shifted);
+    // 000000PONM LKJIHG
+    let le_left_bytes_shifted = shift_bits(le_left_bytes_decoded);
+    // 000000PONM LKJIHGFEDCBA0000
+    vst1q_u8(le_bytes.as_mut_ptr(), le_left_bytes_shifted);
 
-    Ok(u128::from_be_bytes(be_bytes[0..16].try_into().unwrap()).into())
+    Ok(u128::from_le_bytes(le_bytes[6..22].try_into().unwrap()).into())
 }
 
 #[target_feature(enable = "neon")]
@@ -115,9 +72,7 @@ unsafe fn is_all_zeros(value: uint8x16_t) -> bool {
 }
 
 #[target_feature(enable = "neon")]
-unsafe fn encoding_lookup(ulid_str_ptr: *const u8) -> uint8x16_t {
-    let encoded_bytes = vld1q_u8(ulid_str_ptr);
-
+unsafe fn encoding_lookup(encoded_bytes: uint8x16_t) -> uint8x16_t {
     let mut result = vdupq_n_u8(0xFF);
 
     // Decode digits
@@ -175,53 +130,56 @@ unsafe fn encoding_lookup(ulid_str_ptr: *const u8) -> uint8x16_t {
     result
 }
 
+static SHIFT_1: Aligned<A16, [i8; 16]> = Aligned([0, 5, 2, 7, 4, 1, 6, 3, 0, 5, 2, 7, 4, 1, 6, 3]);
+
+static SHIFT_2: Aligned<A16, [i8; 16]> =
+    Aligned([0, -3, 0, -1, -4, 0, -2, 0, 0, -3, 0, -1, -4, 0, -2, 0]);
+
+static LOOKUP_1: Aligned<A16, [u8; 16]> = Aligned([
+    0xFF, 0xFF, 0xFF, 0x01, 0x03, 0x04, 0x06, 0x07, 0xFF, 0xFF, 0xFF, 0x09, 0x0B, 0x0C, 0x0E, 0x0F,
+]);
+
+static LOOKUP_2: Aligned<A16, [u8; 16]> = Aligned([
+    0xFF, 0xFF, 0xFF, 0x00, 0x02, 0xFF, 0x05, 0xFF, 0xFF, 0xFF, 0xFF, 0x08, 0x0A, 0xFF, 0x0D, 0xFF,
+]);
+
+static LOOKUP_3: Aligned<A16, [u8; 16]> = Aligned([
+    0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x03, 0x04, 0x06, 0xFF, 0xFF, 0xFF, 0xFF, 0x09, 0x0B, 0x0C, 0x0E,
+]);
+
+static SHIFT_64: Aligned<A16, [u8; 16]> = Aligned([
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+]);
+
 /**
  * Shifts bits from the 5-bit representation into normal bytes
  * # Safety
- * `result` MUST have 10 bytes of space
+ * No restrictions on caller
  */
 #[target_feature(enable = "neon")]
 unsafe fn shift_bits(value: uint8x16_t) -> uint8x16_t {
-    // Lower eight bytes (64 bits) of the value is:
-    // 000ABCDE|000FGHIJ|000KLMNO|000PQRST|000UVWXY|000Zabcd|000efghi|000jklmn
+    // Eight bytes of the value is:
+    // 000jklmn|000efghi|000Zabcd|000UVWXY|000PQRST|000KLMNO|000FGHIJ|000ABCDE
 
-    // ABCDE000|FGHIJ000|KLMNO000|PQRST000|UVWXY000|Zabcd000|efghi000|jklmn000
-    let left_8_3 = vshlq_n_u8::<3>(value);
-    // ABCDE000|00000000|KLMNO000|00000000|UVWXY000|00000000|efghi000|00000000
-    let left_8_3_maked = vandq_u16(vreinterpretq_u16_u8(left_8_3), vdupq_n_u16(0xF8_00));
+    //     0   |    5   |    2   |    7   |    4   |    1   |    6   |    3
+    // 000jklmn|ghi00000|0Zabcd00|Y0000000|QRST0000|00KLMNO0|IJ000000|ABCDE000
+    let shift_1 = vshlq_u8(value, vld1q_s8(SHIFT_1.as_ptr()));
+    // 00000000|00000000|00000000|ghi00000|Y0000000|QRST0000|IJ000000|ABCDE000
+    let lookup_1 = vqtbl1q_u8(shift_1, vld1q_u8(LOOKUP_1.as_ptr()));
+    // 00000000|00000000|00000000|000jklmn|0Zabcd00|00000000|00KLMNO0|00000000
+    let lookup_2 = vqtbl1q_u8(shift_1, vld1q_u8(LOOKUP_2.as_ptr()));
 
-    // DE000FGH|IJ000000|NO000PQR|ST000000|XY000Zab|cd000000|hi000jkl|mn000000
-    let left_16_6 = vshlq_n_u16::<6>(vreinterpretq_u16_u8(value));
-    // 00000FGH|IJ000000|00000PQR|ST000000|00000Zab|cd000000|00000jkl|mn000000
-    let left_16_6_maked = vandq_u16(left_16_6, vdupq_n_u16(0x07_C0));
+    //     0   |   -3   |    0   |   -1   |   -4   |    0   |   -2   |    0
+    // 000jklmn|000000ef|000Zabcd|0000UVWX|0000000P|000KLMNO|00000FGH|000ABCDE
+    let shift_2 = vshlq_u8(value, vld1q_s8(SHIFT_2.as_ptr()));
+    // 00000000|00000000|00000000|00000000|000000ef|0000UVWX|0000000P|00000FGH
+    let lookup_3 = vqtbl1q_u8(shift_2, vld1q_u8(LOOKUP_3.as_ptr()));
 
-    // ABCDEFGH|IJ000000|KLMNOPQR|ST000000|UVWXYZab|cd000000|efghijkl|mn000000
-    let two_chars = vreinterpretq_u32_u16(vorrq_u16(left_8_3_maked, left_16_6_maked));
-    // ABCDEFGH|IJ000000|00000000|00000000|UVWXYZab|cd000000|00000000|00000000
-    let two_chars_masked = vandq_u32(two_chars, vdupq_n_u32(0xFF_C0_00_00));
+    // 00000000|00000000|00000000|ghijklmn|YZabcdef|QRSTUVWX|IJKLMNOP|ABCDEFGH
+    let sixtyfourx2 = vorrq_u8(vorrq_u8(lookup_1, lookup_2), lookup_3);
 
-    // GHIJ0000|00KLMNOP|QRST0000|00000000|abcd0000|00efghij|klmn0000|00000000
-    let left_32_6 = vshlq_n_u32::<6>(two_chars);
-    // 00000000|00KLMNOP|QRST0000|00000000|00000000|00efghij|klmn0000|00000000
-    let left_32_6_masked = vandq_u32(left_32_6, vdupq_n_u32(0x00_3F_F0_00));
-
-    // ABCDEFGH|IJKLMNOP|QRST0000|00000000|UVWXYZab|cdefghij|klmn0000|00000000
-    let four_chars = vreinterpretq_u64_u32(vorrq_u32(two_chars_masked, left_32_6_masked));
-    // ABCDEFGH|IJKLMNOP|QRST0000|00000000|00000000|00000000|00000000|00000000
-    let four_chars_masked = vandq_u64(four_chars, vdupq_n_u64(0xFF_FF_F0_00_00_00_00_00));
-
-    // MNOPQRST|00000000|0000UVWX|YZabcdef|ghijklmn|00000000|00000000|00000000
-    let left_64_12 = vshlq_n_u64::<12>(four_chars);
-    // 00000000|00000000|0000UVWX|YZabcdef|ghijklmn|00000000|00000000|00000000
-    let left_64_12_masked = vandq_u64(left_64_12, vdupq_n_u64(0x00_00_0F_FF_FF_00_00_00));
-
-    // ABCDEFGH|IJKLMNOP|QRSTUVWX|YZabcdef|ghijklmn|00000000|00000000|00000000
-    let shifted_bits = vorrq_u64(four_chars_masked, left_64_12_masked);
-
-    // The array is now to u64 (little-endian) in big-endian order
-    let bytes5x2 = vreinterpretq_u8_u64(shifted_bits);
-
-    vqtbl1q_u8(bytes5x2, vld1q_u8(FINAL_BYTES_SHIFT.as_ptr()))
+    // Six 0 bytes followed by ten bytes of data
+    vqtbl1q_u8(sixtyfourx2, vld1q_u8(SHIFT_64.as_ptr()))
 }
 
 #[cfg(test)]
