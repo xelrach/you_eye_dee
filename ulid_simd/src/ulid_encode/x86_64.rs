@@ -1,3 +1,9 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
 use std::arch::x86_64::{
     __m128i, __m256i, _mm256_add_epi8, _mm256_and_si256, _mm256_broadcastsi128_si256,
     _mm256_cmpgt_epi8, _mm256_mulhi_epu16, _mm256_mullo_epi16, _mm256_or_si256,
