@@ -5,7 +5,7 @@
  */
 
 use crate::ulid_decode::consts::{
-    AO_TABLE, CHAR_0, MASK_LAST_TEN_BYTES, PZ_TABLE, ULID_INVALID_MASK,
+    AO_TABLE, MASK_LAST_TEN_BYTES, PZ_TABLE, ULID_INVALID_MASK,
 };
 use crate::ulid_decode::DecodeError;
 use crate::Ulid;
@@ -22,6 +22,8 @@ use core::arch::x86_64::{
 };
 use std::arch::x86_64::{_mm256_load_si256, _mm_load_si128};
 use std::ptr::copy_nonoverlapping;
+
+pub const CHAR_0: i8 = 0x30;
 
 #[target_feature(enable = "avx2")]
 unsafe fn find_invalid_char_m256i(decoded: __m256i) -> DecodeError {
@@ -59,37 +61,39 @@ unsafe fn find_invalid_char_m128i(high: __m128i, low: __m128i) -> DecodeError {
 /**
  * Decodes a ULID string into a `u128` using SSSE3 instructions
  * # Safety
- * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
+ * Uses SSSE3 intrinsics. Only call on SSSE3 targets
  */
 #[target_feature(enable = "ssse3")]
-pub unsafe fn string_to_ulid_ssse3(input: &str) -> Result<Ulid, DecodeError> {
-    // Convert from the string into an array of bytes
-    let mut high = encoding_lookup_ssse3(input.as_bytes().as_ptr().offset(-6));
-    // Zero the extra six bytes at the end of the array
-    let actual_bytes_mask = _mm_load_si128(MASK_LAST_TEN_BYTES.as_ptr() as *const __m128i);
-    high = _mm_and_si128(high, actual_bytes_mask);
+pub fn string_to_ulid_ssse3(input: &str) -> Result<Ulid, DecodeError> {
+    unsafe {
+        // Convert from the string into an array of bytes
+        let mut high = encoding_lookup_ssse3(input.as_bytes().as_ptr().offset(-6));
+        // Zero the extra six bytes at the end of the array
+        let actual_bytes_mask = _mm_load_si128(MASK_LAST_TEN_BYTES.as_ptr() as *const __m128i);
+        high = _mm_and_si128(high, actual_bytes_mask);
 
-    let low = encoding_lookup_ssse3(input.as_bytes().as_ptr().offset(10));
+        let low = encoding_lookup_ssse3(input.as_bytes().as_ptr().offset(10));
 
-    // Check that all the characters were valid
-    let mask_max_high = _mm_load_si128(ULID_INVALID_MASK.as_ptr() as *const __m128i);
-    let invalid_high = _mm_and_si128(high, mask_max_high);
-    if !is_all_zeros(invalid_high) {
-        return Err(find_invalid_char_m128i(high, low));
+        // Check that all the characters were valid
+        let mask_max_high = _mm_load_si128(ULID_INVALID_MASK.as_ptr() as *const __m128i);
+        let invalid_high = _mm_and_si128(high, mask_max_high);
+        if !is_all_zeros(invalid_high) {
+            return Err(find_invalid_char_m128i(high, low));
+        }
+
+        let mask_max_low = _mm_load_si128(ULID_INVALID_MASK.as_ptr().offset(16) as *const __m128i);
+        let invalid_low = _mm_and_si128(low, mask_max_low);
+        if !is_all_zeros(invalid_low) {
+            return Err(find_invalid_char_m128i(high, low));
+        }
+
+        // Rearrange the bits into an array
+        let mut le_bytes: [u8; 20] = [0; 20];
+        shift_bits_128(low, le_bytes.as_mut_ptr());
+        shift_bits_128(high, le_bytes.as_mut_ptr().offset(10));
+
+        Ok(u128::from_le_bytes(le_bytes[0..16].try_into().unwrap()).into())
     }
-
-    let mask_max_low = _mm_load_si128(ULID_INVALID_MASK.as_ptr().offset(16) as *const __m128i);
-    let invalid_low = _mm_and_si128(low, mask_max_low);
-    if !is_all_zeros(invalid_low) {
-        return Err(find_invalid_char_m128i(high, low));
-    }
-
-    // Rearrange the bits into an array
-    let mut le_bytes: [u8; 20] = [0; 20];
-    shift_bits_128(low, le_bytes.as_mut_ptr());
-    shift_bits_128(high, le_bytes.as_mut_ptr().offset(10));
-
-    Ok(u128::from_le_bytes(le_bytes[0..16].try_into().unwrap()).into())
 }
 
 #[target_feature(enable = "ssse3")]
@@ -204,81 +208,83 @@ unsafe fn shift_bits_128(value: __m128i, result: *mut u8) {
 /**
  * Decodes a ULID string into a `u128` using AVX2 instructions
  * # Safety
- * Code uses raw pointers and x86_64 intrinsics. No safety requirements for caller.
+ * Uses AVX2 intrinsics. Only call on AVX2 targets
  */
 #[target_feature(enable = "avx2")]
-pub unsafe fn string_to_ulid_avx2(input: &str) -> Result<Ulid, DecodeError> {
-    let values = encoding_lookup_avx2(input);
+pub fn string_to_ulid_avx2(input: &str) -> Result<Ulid, DecodeError> {
+    unsafe {
+        let values = encoding_lookup_avx2(input);
 
-    // Check that all of the characters were valid
-    let mask_max = _mm256_load_si256(ULID_INVALID_MASK.as_ptr() as *const __m256i);
-    let valid = _mm256_testz_si256(values, mask_max);
-    if valid == 0 {
-        return Err(find_invalid_char_m256i(values));
+        // Check that all of the characters were valid
+        let mask_max = _mm256_load_si256(ULID_INVALID_MASK.as_ptr() as *const __m256i);
+        let valid = _mm256_testz_si256(values, mask_max);
+        if valid == 0 {
+            return Err(find_invalid_char_m256i(values));
+        }
+
+        // Lower eight bytes (64 bits) of the value is:
+        // 000hhhhh|000ggggg|000fffff|000eeeee|000ddddd|000ccccc|000bbbbb|000aaaaa
+
+        // Swap and shift u8s into u16s
+
+        // 00100000|00000001|00100000|00000001|00100000|00000001|00100000|00000001
+        let multiplicand = _mm256_set1_epi16(0x01_20);
+        // hhhggggg|000000hh|fffeeeee|000000ff|dddccccc|000000dd|bbbaaaaa|000000bb
+        let byte_product = _mm256_maddubs_epi16(values, multiplicand);
+
+        // Swap and shift u16s into u32s
+
+        // Treat each pair of bytes as a LE word.
+        // Shift even words 10 to the left. Don't shift odd words. Sum the results into u32
+        // 00000000|00000100|00000001|00000000|00000000|00000100|00000001|00000000
+        let multiplicand = _mm256_set1_epi32(0x0001_0400);
+        // 00000000|0000eeee|efffffgg|ggghhhhh|00000000|0000aaaa|abbbbbcc|cccddddd
+        let word_product = _mm256_madd_epi16(byte_product, multiplicand);
+
+        // Swap and shift u32s into u64s
+
+        // Shift left 20 to align a, b, c, and d
+        // ffgggggh|hhhh0000|00000000|aaaaabbb|bbcccccd|dddd0000|00000000|00000000
+        let abcd = _mm256_slli_epi64::<20>(word_product);
+
+        // Shift right 32 to align e, f, g, and h
+        // 00000000|00000000|00000000|00000000|00000000|0000eeee|efffffgg|ggghhhhh
+        let efgh = _mm256_srli_epi64::<32>(word_product);
+
+        // ffgggggh|hhhh0000|00000000|aaaaabbb|bbcccccd|ddddeeee|efffffgg|ggghhhhh
+        let mut combined = _mm256_or_si256(abcd, efgh);
+
+        // mask:
+        // 00000000|00000000|00000000|11111111|11111111|11111111|11111111|11111111
+        let abcdefgh_mask = _mm256_set1_epi64x(0x000000FFFFFFFFFF);
+        // 00000000|00000000|00000000|aaaaabbb|bbcccccd|ddddeeee|efffffgg|ggghhhhh
+        combined = _mm256_and_si256(combined, abcdefgh_mask);
+
+        // Swap the quadwords from big endian to little endian
+
+        // ABCDE000|FGHIJ000|KLMNO000|P0000000
+        let permuted = _mm256_permute4x64_epi64::<0x1B>(combined);
+
+        #[rustfmt::skip]
+            let shuffle = _mm256_setr_epi8(
+            0x0, 0x1, 0x2, 0x3, 0x4, 0x8, 0x9, 0xA,
+            0xB, 0xC, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, 0x0, 0x1, 0x2, 0x3, 0x4, 0x8,
+        );
+        // ABCDEFGHIJ000000|000O0000000KLMNP
+        let shuffled = _mm256_shuffle_epi8(permuted, shuffle);
+
+        let mut bytes: [u8; 32] = [0; 32];
+        _mm256_storeu_si256(bytes.as_mut_ptr() as *mut __m256i, shuffled);
+
+        let mut result = u128::from_le_bytes(bytes[0..16].try_into().unwrap());
+        let high = u128::from_le_bytes(bytes[16..32].try_into().unwrap());
+
+        result |= high;
+
+        Ok(result.into())
     }
-
-    // Lower eight bytes (64 bits) of the value is:
-    // 000hhhhh|000ggggg|000fffff|000eeeee|000ddddd|000ccccc|000bbbbb|000aaaaa
-
-    // Swap and shift u8s into u16s
-
-    // 00100000|00000001|00100000|00000001|00100000|00000001|00100000|00000001
-    let multiplicand = _mm256_set1_epi16(0x01_20);
-    // hhhggggg|000000hh|fffeeeee|000000ff|dddccccc|000000dd|bbbaaaaa|000000bb
-    let byte_product = _mm256_maddubs_epi16(values, multiplicand);
-
-    // Swap and shift u16s into u32s
-
-    // Treat each pair of bytes as a LE word.
-    // Shift even words 10 to the left. Don't shift odd words. Sum the results into u32
-    // 00000000|00000100|00000001|00000000|00000000|00000100|00000001|00000000
-    let multiplicand = _mm256_set1_epi32(0x0001_0400);
-    // 00000000|0000eeee|efffffgg|ggghhhhh|00000000|0000aaaa|abbbbbcc|cccddddd
-    let word_product = _mm256_madd_epi16(byte_product, multiplicand);
-
-    // Swap and shift u32s into u64s
-
-    // Shift left 20 to align a, b, c, and d
-    // ffgggggh|hhhh0000|00000000|aaaaabbb|bbcccccd|dddd0000|00000000|00000000
-    let abcd = _mm256_slli_epi64::<20>(word_product);
-
-    // Shift right 32 to align e, f, g, and h
-    // 00000000|00000000|00000000|00000000|00000000|0000eeee|efffffgg|ggghhhhh
-    let efgh = _mm256_srli_epi64::<32>(word_product);
-
-    // ffgggggh|hhhh0000|00000000|aaaaabbb|bbcccccd|ddddeeee|efffffgg|ggghhhhh
-    let mut combined = _mm256_or_si256(abcd, efgh);
-
-    // mask:
-    // 00000000|00000000|00000000|11111111|11111111|11111111|11111111|11111111
-    let abcdefgh_mask = _mm256_set1_epi64x(0x000000FFFFFFFFFF);
-    // 00000000|00000000|00000000|aaaaabbb|bbcccccd|ddddeeee|efffffgg|ggghhhhh
-    combined = _mm256_and_si256(combined, abcdefgh_mask);
-
-    // Swap the quadwords from big endian to little endian
-
-    // ABCDE000|FGHIJ000|KLMNO000|P0000000
-    let permuted = _mm256_permute4x64_epi64::<0x1B>(combined);
-
-    #[rustfmt::skip]
-        let shuffle = _mm256_setr_epi8(
-        0x0, 0x1, 0x2, 0x3, 0x4, 0x8, 0x9, 0xA,
-        0xB, 0xC, -1, -1, -1, -1, -1, -1,
-        -1, -1, -1, -1, -1, -1, -1, -1,
-        -1, -1, 0x0, 0x1, 0x2, 0x3, 0x4, 0x8,
-    );
-    // ABCDEFGHIJ000000|000O0000000KLMNP
-    let shuffled = _mm256_shuffle_epi8(permuted, shuffle);
-
-    let mut bytes: [u8; 32] = [0; 32];
-    _mm256_storeu_si256(bytes.as_mut_ptr() as *mut __m256i, shuffled);
-
-    let mut result = u128::from_le_bytes(bytes[0..16].try_into().unwrap());
-    let high = u128::from_le_bytes(bytes[16..32].try_into().unwrap());
-
-    result |= high;
-
-    Ok(result.into())
 }
 
 #[target_feature(enable = "avx2")]

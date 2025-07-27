@@ -27,12 +27,14 @@ fn encode(c: &mut Criterion) {
             let _result = u128_to_ascii_scalar(&rand_u128);
         });
     });
+
     group.bench_function("u128_to_ascii_scalar_unsafe", |bencher| {
         bencher.iter(|| {
             let _result = u128_to_ascii_scalar_unsafe(&rand_u128);
         });
     });
-    #[cfg(all(target_arch = "x64_64", target_feature = "ssse3"))]
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "ssse3"))]
     {
         group.bench_function("u128_to_ascii_ssse3", |bencher| {
             bencher.iter(|| unsafe {
@@ -40,7 +42,8 @@ fn encode(c: &mut Criterion) {
             });
         });
     }
-    #[cfg(all(target_arch = "x64_64", target_feature = "axv2"))]
+    
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
     {
         group.bench_function("u128_to_ascii_avx2", |bencher| {
             bencher.iter(|| unsafe {
@@ -62,6 +65,21 @@ fn decode(c: &mut Criterion) {
             let _result = string_to_ulid_scalar(&ulid_string);
         });
     });
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "ssse3"))]
+    group.bench_function("string_to_ulid_ssse3", |bencher| {
+        bencher.iter(|| unsafe {
+            let _result = string_to_ulid_ssse3(&ulid_string);
+        });
+    });
+
+    #[cfg(all(target_arch = "x86_64", target_feature = "avx2"))]
+    group.bench_function("string_to_ulid_avx2", |bencher| {
+        bencher.iter(|| unsafe {
+            let _result = string_to_ulid_avx2(&ulid_string);
+        });
+    });
+
     #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
     {
         group.bench_function("string_to_ulid_neon", |bencher| {
@@ -70,26 +88,6 @@ fn decode(c: &mut Criterion) {
             });
         });
     }
-}
-
-fn generate_ulid_strings(count: usize) -> Vec<String> {
-    let mut ulids = Vec::with_capacity(count);
-    for _ in 0..count {
-        let ulid: Ulid = rand::random::<u128>().into();
-        ulids.push(ulid.encode());
-    }
-
-    ulids
-}
-
-fn generate_ulid_bytes(count: usize) -> Vec<u128> {
-    let mut ulids = Vec::with_capacity(count);
-    for _ in 0..count {
-        let ulid = rand::random::<u128>();
-        ulids.push(ulid);
-    }
-
-    ulids
 }
 
 criterion_group!(ulid_foo, encode, decode);
