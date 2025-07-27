@@ -12,7 +12,8 @@ use std::sync::OnceLock;
 
 static CROCKFORD_BASE32_ENCODE: [u8; 256] = include!("../../resources/crockford_base32_encode.txt");
 
-static ENCODE_ULID_FN: OnceLock<unsafe fn(ulid: &u128) -> String> = OnceLock::new();
+type EncodeFn = unsafe fn(ulid: &u128) -> String;
+static ENCODE_ULID_FN: OnceLock<EncodeFn> = OnceLock::new();
 
 pub fn ulid_to_string(input: &Ulid) -> String {
     let func = ENCODE_ULID_FN.get_or_init(|| {

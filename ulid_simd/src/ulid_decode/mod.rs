@@ -4,19 +4,19 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
+mod consts;
 #[cfg(target_arch = "aarch64")]
 pub mod aarch64;
-mod consts;
 #[cfg(target_arch = "x86_64")]
 pub mod x86_64;
 
 use crate::{Ulid, ULID_LENGTH};
-use std::arch::is_aarch64_feature_detected;
 use std::sync::OnceLock;
 
 static CROCKFORD_BASE32: [u8; 256] = include!("../../resources/crockford_base32_decode.txt");
 
-static DECODE_ULID_FN: OnceLock<unsafe fn(input: &str) -> Result<Ulid, DecodeError>> =
+type DecodeFn = unsafe fn(input: &str) -> Result<Ulid, DecodeError>;
+static DECODE_ULID_FN: OnceLock<DecodeFn> =
     OnceLock::new();
 
 #[derive(Debug, PartialEq, Eq)]

@@ -14,6 +14,17 @@ use std::arch::aarch64::{
     vreinterpretq_u16_u8, vreinterpretq_u8_s8, vshlq_u8, vshrn_n_u16, vst1q_u8, vsubq_s8,
 };
 
+pub const CHAR_0: u8 = 0x30;
+pub const CHAR_9: u8 = 0x39;
+pub const CHAR_UPPER_A: u8 = 0x41;
+pub const CHAR_UPPER_O: u8 = 0x4F;
+pub const CHAR_UPPER_P: u8 = 0x50;
+pub const CHAR_UPPER_Z: u8 = 0x5A;
+pub const CHAR_LOWER_A: u8 = 0x61;
+pub const CHAR_LOWER_O: u8 = 0x6F;
+pub const CHAR_LOWER_P: u8 = 0x70;
+pub const CHAR_LOWER_Z: u8 = 0x7A;
+
 pub static FINAL_BYTES_SHIFT: [u8; 16] = [
     0x03, 0x04, 0x05, 0x06, 0x07, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 ];
