@@ -6,7 +6,11 @@
 
 use std::time::Duration;
 
-pub const MAX_TIME_MS: u64 = 0xFFFF_FFFFFFFF;
-pub const MAX_TIME_DURATION: Duration = Duration::from_millis(MAX_TIME_MS);
-pub const NANOS_IN_MILLIS: u32 = 1_000_000;
+// (2^48) - 1
+const MAX_TIME_MILLIS: u64 = 0xFFFF_FFFFFFFF;
+pub const NANOS_IN_MILLI: u32 = 1_000_000;
+pub const MAX_TIME_DURATION: Duration = Duration::new(
+    MAX_TIME_MILLIS / 1000,
+    ((MAX_TIME_MILLIS % 1000) as u32 * NANOS_IN_MILLI) + 999_999);
+
 pub const ULID_LENGTH: usize = 16;
