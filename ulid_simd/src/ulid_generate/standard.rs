@@ -4,14 +4,14 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-use std::time::{Duration, SystemTime};
+#[cfg(feature = "default_rng")]
 use rand::rngs::StdRng;
-use rand::RngCore;
-use rand::SeedableRng;
+use rand::{RngCore, SeedableRng};
+use std::time::{Duration, SystemTime};
 
-use crate::Ulid;
-use crate::ulid_generate::UlidGenerationError;
 use crate::ulid_generate::consts::*;
+use crate::ulid_generate::UlidGenerationError;
+use crate::Ulid;
 
 const MAX_RANDOMNESS_VALUE: u128 = 0xFFFF_FFFFFFFF_FFFFFFFF;
 
@@ -27,10 +27,10 @@ pub trait UlidGenerator {
 }
 
 /**
- * Complies with ULID spec by storing state which ensures that all ULIDs are monotonically
- * increasing.
+ * Creates ULIDs. Complies with ULID spec by storing state which ensures that all ULIDs are
+ * monotonically increasing.
  */
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UlidGeneratorMonotonic<T: RngCore> {
     time_ms: u64,
     random: u128,
@@ -75,17 +75,7 @@ impl<T: RngCore> UlidGenerator for UlidGeneratorMonotonic<T> {
     }
 }
 
-impl<T: RngCore + Clone> Clone for UlidGeneratorMonotonic<T> {
-    fn clone(&self) -> Self {
-        Self {
-                time_ms: self.time_ms,
-                random: self.random,
-                rng: self.rng.clone(),
-        }
-    }
-}
-
-#[cfg(feature = "create")]
+#[cfg(feature = "default_rng")]
 impl Default for UlidGeneratorMonotonic<StdRng> {
     fn default() -> Self {
         Self {
@@ -121,21 +111,21 @@ mod tests {
     #[derive(Debug, Clone)]
     struct Param {
         rng_byte: u8,
-        unix_time: u64,
+        unix_time: Duration,
         expected: &'static str,
     }
 
     static PARAMS: [Param; 4] = [
-        Param { rng_byte: 0, unix_time: 0, expected: "00000000000000000000000001" },
-        Param { rng_byte: 0xFF, unix_time: 0, expected: "00000000000000000000000001" },
-        Param { rng_byte: 0, unix_time: MAX_TIME_MS, expected: "7ZZZZZZZZZ0000000000000000" },
-        Param { rng_byte: 0xFF, unix_time: MAX_TIME_MS, expected: "7ZZZZZZZZZZZZZZZZZZZZZZZZZ" },
+        Param { rng_byte: 0, unix_time: Duration::from_secs(0), expected: "00000000000000000000000001" },
+        Param { rng_byte: 0xFF, unix_time: Duration::from_secs(0), expected: "00000000000000000000000001" },
+        Param { rng_byte: 0, unix_time: MAX_TIME_DURATION, expected: "7ZZZZZZZZZ0000000000000000" },
+        Param { rng_byte: 0xFF, unix_time: MAX_TIME_DURATION, expected: "7ZZZZZZZZZZZZZZZZZZZZZZZZZ" },
     ];
 
     #[test]
     fn test_ulid_generator_monotonic_too_far_future() {
         let mut generator = UlidGeneratorMonotonic::default();
-        let result = generator.create(Duration::from_millis(MAX_TIME_MS + 1));
+        let result = generator.create(MAX_TIME_DURATION + Duration::from_millis(1));
 
         assert!(matches!(result, Err(UlidGenerationError::TooFarFuture(t)) if t == Duration::from_millis(1)));
     }
@@ -152,7 +142,7 @@ mod tests {
     fn test_ulid_generator_monotonic() {
         for param in PARAMS.clone() {
             let mut generator = UlidGeneratorMonotonic { rng: FixedRng{byte: param.rng_byte}, time_ms: 0, random: 0 };
-            let result = generator.create(Duration::from_millis(param.unix_time));
+            let result = generator.create(param.unix_time);
             match result {
                 Ok(ulid) => {
                     assert_eq!(ulid.to_string(), param.expected);
@@ -160,5 +150,11 @@ mod tests {
                 Err(e) => {panic!("Unexpected error: {:?}", e);}
             }
         }
+    }
+
+    fn require_send<T: Send>(_t: &T) {}
+    #[test]
+    fn test_ulid_generator_monotonic_is_send() {
+        require_send(&UlidGeneratorMonotonic::default());
     }
 }

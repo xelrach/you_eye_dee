@@ -14,6 +14,5 @@ pub enum UlidGenerationError {
 }
 
 pub mod standard;
-#[cfg(feature = "stateless")]
 pub mod stateless;
 mod consts;
